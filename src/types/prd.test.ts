@@ -80,7 +80,8 @@ describe('questionnaire answers contract', () => {
   });
 
   it('rejects a missing required group', () => {
-    const { basics: _basics, ...rest } = VALID_ANSWERS;
+    const rest: Record<string, unknown> = { ...VALID_ANSWERS };
+    delete rest.basics;
     expect(questionnaireAnswersSchema.safeParse(rest).success).toBe(false);
   });
 
