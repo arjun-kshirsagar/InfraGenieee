@@ -106,6 +106,7 @@ export function WizardShell() {
         key={question.path}
         question={question}
         value={getAnswer(draft, question.path)}
+        read={(path) => getAnswer(draft, path)}
         onChange={(value) => setDraft((prev) => setAnswer(prev, question.path, value))}
       />
     ),
