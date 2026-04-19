@@ -16,7 +16,9 @@ Next.js (App Router) + TypeScript (strict) + Tailwind + shadcn/ui. Charts: Recha
 - **Shared contracts** live in `/docs` and `/types`. Backend + architect own them; frontend consumes them.
 - **No hardcoded secrets.** Use server-side env vars.
 - **Don't loop.** If stuck after 2–3 genuine attempts, block the task with a specific reason for the human instead of spinning.
-- **Verify before completing:** `npm run build` + `npm run lint` pass; browser-test real flows (Playwright/Chromium is installed).
+- **Verify before completing:** run `npx tsc --noEmit` (typecheck) + `npm run lint` + `npm test`. These are FAST and catch type/logic errors.
+- **⚠️ Do NOT run `npm run build` (`next build`) to verify.** On this small box a full production build is very slow (mermaid + heavy deps) and can exhaust your iteration budget, leaving a stale `.next` lock that traps later runs. Typecheck + lint + tests are sufficient for task completion. Only the reviewer runs the app, and they use `npm run dev` (light), NOT a production build. If a production build is ever truly needed, block the task and ask the human.
+- **One task runs at a time** (concurrency capped at 1) — but never leave a `next build`/`next start` process running in the background when you finish; kill any dev server you started.
 
 ## Repo
 `Vishesh-Paliwal/InfraGenieee` — the only repo agents may push to.
