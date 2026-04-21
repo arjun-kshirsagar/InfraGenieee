@@ -15,10 +15,14 @@ Next.js (App Router) + TypeScript (strict) + Tailwind + shadcn/ui. Charts: Recha
 - **Real data only.** Vendor pricing and third-party API behavior must be sourced (web_extract/web_search), never fabricated. Cite sources in code comments.
 - **Shared contracts** live in `/docs` and `/types`. Backend + architect own them; frontend consumes them.
 - **No hardcoded secrets.** Use server-side env vars.
-- **Don't loop.** If stuck after 2–3 genuine attempts, block the task with a specific reason for the human instead of spinning.
-- **Verify before completing:** run `npx tsc --noEmit` (typecheck) + `npm run lint` + `npm test`. These are FAST and catch type/logic errors.
-- **⚠️ Do NOT run `npm run build` (`next build`) to verify.** On this small box a full production build is very slow (mermaid + heavy deps) and can exhaust your iteration budget, leaving a stale `.next` lock that traps later runs. Typecheck + lint + tests are sufficient for task completion. Only the reviewer runs the app, and they use `npm run dev` (light), NOT a production build. If a production build is ever truly needed, block the task and ask the human.
-- **One task runs at a time** (concurrency capped at 1) — but never leave a `next build`/`next start` process running in the background when you finish; kill any dev server you started.
+- **Don't loop / don't blindly retry.** If a command (build, test, anything) fails or hangs, DO NOT just re-run it hoping it works. STOP and diagnose: read the actual error, find the root cause, and fix that cause. Re-running the same failing command unchanged is never the answer. If after genuine diagnosis + fix attempts (2–3) you still can't resolve it, `kanban_block` the task with the specific error and what you tried — for the human.
+- **Verify before completing:** run `npm run build` (`next build`) AND `npm run lint` AND `npm test` — all must pass. The production build is the real gate; it catches issues typecheck alone misses. Also run `npx tsc --noEmit` for a fast early typecheck while developing.
+- **If `npm run build` fails or hangs — diagnose, don't retry blindly:**
+  - Read the error output. Fix real errors (type errors, bad imports, server/client boundary issues, missing deps) at the source.
+  - If it fails with **"Another next build process is already running"**, that's a stale lock from a previously-killed build. Remove `.next/*.lock` (e.g. `rm -f .next/*.lock`) and any orphaned `next` process, then build again once.
+  - If a build is genuinely slow, give it a real timeout (e.g. 6–8 min) rather than killing it early and creating a stale lock. Killing a build mid-run is what causes the lock problem — avoid it.
+  - Never leave a `next build` / `next start` / `next dev` process running in the background when you finish; kill any server you started.
+- **One task runs at a time** (concurrency capped at 1), so builds no longer collide — a clean build should succeed.
 
 ## Repo
 `Vishesh-Paliwal/InfraGenieee` — the only repo agents may push to.
