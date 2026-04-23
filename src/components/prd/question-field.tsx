@@ -93,7 +93,12 @@ export function QuestionField({
   const isEntity = question.kind === 'entity-builder';
 
   return (
-    <div className="flex flex-col gap-1.5" data-slot="question-field" data-kind={question.kind}>
+    <div
+      className="flex flex-col gap-1.5"
+      data-slot="question-field"
+      data-kind={question.kind}
+      data-field={question.path}
+    >
       {isEntity ? (
         <span className="text-sm leading-none font-medium">
           {question.label}
