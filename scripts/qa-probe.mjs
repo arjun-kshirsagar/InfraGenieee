@@ -2,12 +2,13 @@
  * QA probe for POST /api/prd/generate — reviewer-owned, not shipped code.
  * Usage: node scripts/qa-probe.mjs http://127.0.0.1:PORT
  */
+import { mkdirSync, writeFileSync } from 'node:fs';
+
 const BASE = process.argv[2] || 'http://127.0.0.1:3111';
 const OUT = '/tmp/qa';
-import { mkdirSync, writeFileSync } from 'node:fs';
 mkdirSync(OUT, { recursive: true });
 
-const base = (o) => JSON.parse(JSON.stringify(o));
+const clone = (o) => structuredClone(o);
 
 const A = {
   basics: { projectName: 'TinyLinks', oneLiner: 'A minimal link shortener for personal use.', productType: 'web-app', targetAudience: 'Indie hackers', problemStatement: 'Sharing long URLs is ugly and untrackable for solo makers.' },
@@ -103,6 +104,15 @@ function mermaidIssues(m) {
   return problems;
 }
 
+/** Contract guarantee #4 floors (docs/api-contracts.md). [actual, minimum] per axis. */
+const MIN_VOLUME = (doc, taskCount) => ({
+  userStories: [doc.prd.userStories.length, 5],
+  functionalRequirements: [doc.prd.functionalRequirements.length, 8],
+  nonFunctionalRequirements: [doc.prd.nonFunctionalRequirements.length, 5],
+  milestones: [doc.plan.milestones.length, 3],
+  planTasks: [taskCount, 12],
+});
+
 function analyse(key, doc) {
   const ids = new Set();
   const tasks = [];
@@ -138,6 +148,7 @@ function analyse(key, doc) {
   const avoidHits = mustAvoid.filter((x) => new RegExp(x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(infraBlob));
   const frontendish = doc.architecture.components.filter((c) => /frontend|ui|web app|client/i.test(c.kind + ' ' + c.name + ' ' + c.technology));
   const uiTasks = tasks.filter((t) => t.area === 'frontend' || t.area === 'design');
+  const minVolume = MIN_VOLUME(doc, tasks.length);
   return {
     key,
     title: doc.title,
@@ -165,7 +176,9 @@ function analyse(key, doc) {
     totalHours: doc.plan.totalEstimateHours,
     weeks: doc.plan.estimatedCalendarWeeks,
     cpLen: cp.length,
-    minVolumeOk: doc.prd.userStories.length >= 5 && doc.prd.functionalRequirements.length >= 8 && doc.prd.nonFunctionalRequirements.length >= 5 && doc.plan.milestones.length >= 3 && tasks.length >= 12,
+    minVolume,
+    minVolumeBreaches: Object.entries(minVolume).filter(([, [n, min]]) => n < min).map(([k, [n, min]]) => `${k}: ${n} < ${min}`),
+    minVolumeOk: Object.values(minVolume).every(([n, min]) => n >= min),
     missingDeps, cycles, cpUnknown, cpBreaks, badRel, avoidHits,
     frontendComponents: frontendish.map((c) => c.name),
     uiTaskTitles: uiTasks.map((t) => `${t.area}:${t.title}`),
@@ -203,10 +216,10 @@ for (const [key, answers] of Object.entries(SETS)) {
 // error paths
 const errs = {};
 errs.malformed = await post('{not json', true);
-const bad = base(A); delete bad.scale.regions;
+const bad = clone(A); delete bad.scale.regions;
 errs.validation = await post({ answers: bad });
 errs.emptyBody = await post({}, false);
-const badUptime = base(A); badUptime.scale.uptimeTargetPercent = 50;
+const badUptime = clone(A); badUptime.scale.uptimeTargetPercent = 50;
 errs.rangeUptime = await post({ answers: badUptime });
 errs.extraKeys = await post({ answers: A, bogus: 1 });
 report._errors = Object.fromEntries(Object.entries(errs).map(([k, v]) => [k, { status: v.status, body: v.json ?? v.text.slice(0, 200) }]));
