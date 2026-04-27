@@ -17,88 +17,21 @@ import {
   loadDraft,
   clearDraft,
 } from '@/lib/prd/store';
-import type { PrdDocument, QuestionnaireDraft } from '@/types/prd';
-import { VALID_ANSWERS } from '@/types/prd.test';
+import type { PrdDocument, ProjectBriefDraft } from '@/types/prd';
+import { makePrdDocument } from '@/lib/prd/fixtures.test-support';
 
 /* -------------------------------------------------------------------------- */
 /* Fixtures                                                                   */
 /* -------------------------------------------------------------------------- */
 
-/** A minimal valid PrdDocument. `answers` reuses the contract test fixture. */
+/** A valid PrdDocument from the shared fixture. */
 function makeDoc(overrides: Partial<PrdDocument> = {}): PrdDocument {
-  return {
-    id: 'prd_abcdef012345',
-    createdAt: '2026-01-01T00:00:00.000Z',
-    generatorVersion: '1.0.0',
-    title: 'Acme Invoicing',
-    answers: VALID_ANSWERS,
-    prd: {
-      overview: { problem: 'p', solution: 's', targetUsers: 'u', valueProposition: ['v'] },
-      goals: ['g'],
-      nonGoals: ['ng'],
-      userStories: [
-        { id: 'us1', asA: 'user', iWant: 'x', soThat: 'y', priority: 'p0', acceptanceCriteria: ['ac'] },
-      ],
-      functionalRequirements: [{ id: 'fr1', title: 't', detail: 'd', priority: 'p0' }],
-      nonFunctionalRequirements: [
-        { id: 'nfr1', category: 'performance', requirement: 'r', rationale: 'why' },
-      ],
-      successMetrics: ['m'],
-      risks: [{ risk: 'r', impact: 'p1', mitigation: 'm' }],
-      openQuestions: ['q'],
-    },
-    architecture: {
-      summary: 'sum',
-      pattern: 'monolith',
-      components: [{ name: 'web', kind: 'client', responsibility: 'ui', technology: 'next' }],
-      dataModel: { entities: VALID_ANSWERS.dataModel.entities, relationships: [] },
-      apiEndpoints: [{ method: 'GET', path: '/x', purpose: 'p', authRequired: false }],
-      infrastructure: {
-        hosting: 'Vercel',
-        database: 'Postgres',
-        cache: null,
-        storage: null,
-        cicd: 'GitHub Actions',
-        environments: ['prod'],
-        rationale: ['cheap'],
-      },
-      diagramMermaid: 'flowchart TD\n A --> B',
-    },
-    plan: {
-      milestones: [
-        {
-          id: 'm1',
-          name: 'MVP',
-          goal: 'ship',
-          tasks: [
-            {
-              id: 'task1',
-              title: 't',
-              description: 'd',
-              area: 'frontend',
-              estimateHours: 4,
-              dependsOn: [],
-              acceptanceCriteria: ['ac'],
-            },
-          ],
-        },
-      ],
-      criticalPath: ['task1'],
-      totalEstimateHours: 4,
-      estimatedCalendarWeeks: 1,
-    },
-    ...overrides,
-  };
+  return makePrdDocument(overrides);
 }
 
-const SAMPLE_DRAFT: QuestionnaireDraft = {
-  basics: {
-    projectName: 'Draft Project',
-    oneLiner: 'A partial one-liner here',
-    productType: 'web-app',
-    targetAudience: 'testers',
-    problemStatement: 'We are mid-way through the questionnaire.',
-  },
+const SAMPLE_DRAFT: ProjectBriefDraft = {
+  idea: 'A partially typed idea about renting out camera gear between photographers.',
+  context: { userScale: 'small', budgetBand: 'hobby' },
 };
 
 /* -------------------------------------------------------------------------- */
@@ -205,11 +138,8 @@ describe('store — browser', () => {
     expect(loadDraft()).toEqual(SAMPLE_DRAFT);
   });
 
-  it('round-trips a genuinely partial step (autosave mid-form)', () => {
-    // Only one field of `basics` is filled — the contract's
-    // questionnaireDraftSchema would reject this (it requires whole groups),
-    // but the store must tolerate partial autosave so the user can resume.
-    const partial = { basics: { projectName: 'Half-typed' } } as QuestionnaireDraft;
+  it('round-trips a genuinely partial draft (autosave mid-typing)', () => {
+    const partial: ProjectBriefDraft = { idea: 'Half-typed' };
     saveDraft(partial);
     expect(loadDraft()).toEqual(partial);
   });
@@ -220,13 +150,13 @@ describe('store — browser', () => {
   });
 
   it('returns null on a corrupt draft', () => {
-    localStorage.setItem('infragenie:prd-draft', '{not json');
+    localStorage.setItem('infragenie:brief-draft', '{not json');
     expect(loadDraft()).toBeNull();
   });
 
   it('returns null on a draft that fails schema validation', () => {
     localStorage.setItem(
-      'infragenie:prd-draft',
+      'infragenie:brief-draft',
       JSON.stringify({ scale: { userScale: 'gigantic' } }),
     );
     expect(loadDraft()).toBeNull();

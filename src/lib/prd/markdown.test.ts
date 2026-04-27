@@ -2,19 +2,18 @@
  * Unit tests for the pure `toMarkdown` serialiser.
  *
  * Two fixtures:
- *   1. A REAL generated document (generatePrdDocument + VALID_ANSWERS) — every
- *      section must appear, and every id (US-*, FR-*, NFR-*, task ids) present.
+ *   1. A complete, schema-valid document — every section must appear, and
+ *      every id (US-*, FR-*, NFR-*, task ids) present.
  *   2. A hand-built minimal document with all OPTIONAL arrays empty — asserts
  *      the serialiser never emits a dangling header for an empty section.
  */
 
 import { describe, expect, it } from 'vitest';
 import { toMarkdown } from './markdown';
-import { generatePrdDocument } from './generate';
 import { prdDocumentSchema, type PrdDocument } from '@/types/prd';
-import { VALID_ANSWERS } from '@/types/prd.test';
+import { makePrdDocument, VALID_BRIEF } from './fixtures.test-support';
 
-const realDoc = generatePrdDocument(VALID_ANSWERS, 'prd_testfixture1', '2026-01-01T00:00:00.000Z');
+const realDoc = makePrdDocument({ id: 'prd_testfixture1' });
 
 describe('toMarkdown — purity & determinism', () => {
   it('returns the identical string for the same document (pure)', () => {
@@ -42,7 +41,7 @@ describe('toMarkdown — every section appears', () => {
     expect(md).toContain('## Product Requirements');
     expect(md).toContain('## Architecture');
     expect(md).toContain('## Delivery plan');
-    expect(md).toContain('## Questionnaire answers');
+    expect(md).toContain('## The brief');
   });
 
   it('includes PRD sub-sections', () => {
@@ -100,23 +99,31 @@ describe('toMarkdown — every section appears', () => {
     expect(md).toContain(titleById.get(firstCp)!);
   });
 
-  it('includes questionnaire answer sub-sections', () => {
-    for (const h of [
-      '### Basics',
-      '### Scale & traffic',
-      '### Budget & team',
-      '### Stack preferences',
-      '### Auth & compliance',
-      '### Integrations & workloads',
-    ]) {
+  it('echoes the brief that produced the document', () => {
+    for (const h of ['### Idea', '### Context', '### Clarifications', '### Additional notes']) {
       expect(md).toContain(h);
     }
-    expect(md).toContain(VALID_ANSWERS.basics.projectName);
+    expect(md).toContain(VALID_BRIEF.idea);
+    expect(md).toContain(VALID_BRIEF.additionalNotes!);
+  });
+
+  it('renders the AI assumptions section', () => {
+    expect(md).toContain('### Assumptions');
+    for (const a of realDoc.prd.assumptions) expect(md).toContain(a);
+  });
+
+  it('omits clarifications the user skipped', () => {
+    const skipped = VALID_BRIEF.clarifications.find((c) => c.answer.trim() === '');
+    expect(skipped).toBeDefined();
+    expect(md).not.toContain(skipped!.question);
   });
 });
 
 describe('toMarkdown — empty optional arrays produce no dangling headers', () => {
-  // Build a minimal document: required scalars present, all optional arrays empty.
+  // A deliberately EMPTIED document. It does NOT satisfy prdDocumentSchema —
+  // the min-volume floors reject it, which is the point: the API can never
+  // return this. We construct it anyway to prove the serialiser degrades
+  // gracefully rather than emitting headers with nothing under them.
   const minimal: PrdDocument = {
     ...realDoc,
     prd: {
@@ -134,6 +141,7 @@ describe('toMarkdown — empty optional arrays produce no dangling headers', () 
       successMetrics: [],
       risks: [],
       openQuestions: [],
+      assumptions: [],
     },
     architecture: {
       summary: 'sum',
@@ -162,8 +170,8 @@ describe('toMarkdown — empty optional arrays produce no dangling headers', () 
 
   const md = toMarkdown(minimal);
 
-  it('is still a valid document per the schema (fixture sanity check)', () => {
-    expect(prdDocumentSchema.safeParse(minimal).success).toBe(true);
+  it('is rejected by the schema — floors make an empty document unreturnable', () => {
+    expect(prdDocumentSchema.safeParse(minimal).success).toBe(false);
   });
 
   it('omits headers whose content is empty', () => {
@@ -176,6 +184,7 @@ describe('toMarkdown — empty optional arrays produce no dangling headers', () 
       '### Success metrics',
       '### Risks',
       '### Open questions',
+      '### Assumptions',
       '### Components',
       '### API endpoints',
       '### Critical path',

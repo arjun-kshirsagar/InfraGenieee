@@ -38,4 +38,24 @@ export const ERROR_STATUS: Record<ApiError['error']['code'], number> = {
   not_found: 404,
   generation_failed: 500,
   internal_error: 500,
+  // 503: the upstream model is down/rate-limited. Distinct from 500 so the
+  // client can offer a retry rather than presenting a dead end.
+  llm_unavailable: 503,
+  // 500: a server misconfiguration (no API key), never the user's fault.
+  llm_not_configured: 500,
+};
+
+/**
+ * Map a `GenerationError.code` onto the public API error code.
+ *
+ * Kept here rather than in the routes so both `/clarify` and `/generate`
+ * report identical failures identically. `not_implemented` deliberately
+ * surfaces as `generation_failed` — clients need no special case for a seam
+ * that only exists mid-migration.
+ */
+export const GENERATION_ERROR_CODE: Record<string, ApiError['error']['code']> = {
+  not_configured: 'llm_not_configured',
+  unavailable: 'llm_unavailable',
+  invalid_output: 'generation_failed',
+  not_implemented: 'generation_failed',
 };

@@ -3,8 +3,7 @@
  *
  * `toMarkdown(doc)` is a PURE function: no DOM, no `window`, no I/O. It turns a
  * `PrdDocument` into a single readable Markdown document covering all three
- * sections (PRD / Architecture / Plan) plus the questionnaire answers that
- * produced it. It powers the "Copy as Markdown" and "Download .md" actions on
+ * sections (PRD / Architecture / Plan) plus the brief that produced it. It powers the "Copy as Markdown" and "Download .md" actions on
  * the document view, and is unit-tested in `markdown.test.ts`.
  *
  * Design rules:
@@ -14,12 +13,15 @@
  *   - Deterministic: same document in → same string out.
  */
 
-import type {
-  PrdDocument,
-  QuestionnaireAnswers,
-  Milestone,
-  PlanTask,
-  Entity,
+import {
+  BUDGET_BAND_LABEL,
+  TRAFFIC_PATTERN_LABEL,
+  USER_SCALE_LABEL,
+  type PrdDocument,
+  type ProjectBrief,
+  type Milestone,
+  type PlanTask,
+  type Entity,
 } from '@/types/prd';
 
 /** Join non-empty blocks with a blank line between them. */
@@ -125,6 +127,9 @@ function prdMarkdown(doc: PrdDocument): string {
     ),
   );
 
+  // Assumptions are first-class in the AI flow: the user never specified
+  // entities or auth, so the document must state what it decided for them.
+  parts.push(section('### Assumptions', bulletList(prd.assumptions)));
   parts.push(section('### Open questions', bulletList(prd.openQuestions)));
 
   return joinBlocks(parts);
@@ -279,116 +284,48 @@ function planMarkdown(doc: PrdDocument): string {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Answers echo                                                               */
+/* Brief echo                                                                 */
 /* -------------------------------------------------------------------------- */
 
-function answersMarkdown(answers: QuestionnaireAnswers): string {
-  const { basics, scale, budget, stack, dataModel, auth, integrations } = answers;
-  const parts: Array<string | null> = [];
+/**
+ * Echo the short brief that produced this document. Deliberately compact —
+ * the user gave us an idea and five context answers, not a filled-in form.
+ */
+function briefMarkdown(brief: ProjectBrief): string {
+  const parts: Array<string | null> = ['## The brief'];
 
-  parts.push('## Questionnaire answers');
-
-  parts.push(
-    section(
-      '### Basics',
-      bulletList([
-        `Project name: ${basics.projectName}`,
-        `One-liner: ${basics.oneLiner}`,
-        `Product type: ${basics.productType}`,
-        `Target audience: ${basics.targetAudience}`,
-        `Problem statement: ${basics.problemStatement}`,
-      ]),
-    ),
-  );
+  parts.push(section('### Idea', brief.idea));
 
   parts.push(
     section(
-      '### Scale & traffic',
-      bulletList([
-        `User scale: ${scale.userScale}`,
-        `Peak requests/sec: ${scale.peakRequestsPerSecond}`,
-        `Data volume: ${scale.dataVolumeGb} GB`,
-        `Growth expectation: ${scale.growthExpectation}`,
-        `Regions: ${scale.regions.join(', ')}`,
-        `Uptime target: ${scale.uptimeTargetPercent}%`,
-      ]),
-    ),
-  );
-
-  parts.push(
-    section(
-      '### Budget & team',
-      bulletList([
-        `Monthly budget band: ${budget.monthlyBudgetBand}`,
-        `Budget is a hard limit: ${budget.budgetIsHardLimit ? 'yes' : 'no'}`,
-        `Team size: ${budget.teamSize}`,
-        `Timeline: ${budget.timelineWeeks} weeks`,
-      ]),
-    ),
-  );
-
-  parts.push(
-    section(
-      '### Stack preferences',
+      '### Context',
       bulletList(
         [
-          `Frontend: ${stack.frontend}`,
-          `Backend: ${stack.backend}`,
-          `Database: ${stack.database}`,
-          `Hosting: ${stack.hosting}`,
-          stack.mustUse.length > 0 ? `Must use: ${stack.mustUse.join(', ')}` : null,
-          stack.mustAvoid.length > 0 ? `Must avoid: ${stack.mustAvoid.join(', ')}` : null,
+          `Expected scale: ${USER_SCALE_LABEL[brief.context.userScale]}`,
+          `Traffic pattern: ${TRAFFIC_PATTERN_LABEL[brief.context.trafficPattern]}`,
+          `Budget: ${BUDGET_BAND_LABEL[brief.context.budgetBand]}`,
+          `Timeline: ${brief.context.timelineWeeks} weeks`,
+          brief.context.constraints ? `Constraints: ${brief.context.constraints}` : null,
         ].filter((x): x is string => x !== null),
       ),
     ),
   );
 
-  // Data model answers (entities as blocks + relationship notes)
-  const answerEntities =
-    dataModel.entities.length > 0 ? dataModel.entities.map(entityBlock).join('\n\n') : null;
-  parts.push(
-    section(
-      '### Data model',
-      joinBlocks([
-        answerEntities,
-        dataModel.relationshipNotes
-          ? `**Relationship notes:** ${dataModel.relationshipNotes}`
-          : null,
-      ]),
-    ),
-  );
-
-  parts.push(
-    section(
-      '### Auth & compliance',
-      bulletList(
-        [
-          `Auth required: ${auth.authRequired ? 'yes' : 'no'}`,
-          auth.authMethods.length > 0 ? `Auth methods: ${auth.authMethods.join(', ')}` : null,
-          auth.roles.length > 0 ? `Roles: ${auth.roles.join(', ')}` : null,
-          `Multi-tenant: ${auth.multiTenant ? 'yes' : 'no'}`,
-          auth.compliance.length > 0 ? `Compliance: ${auth.compliance.join(', ')}` : null,
-        ].filter((x): x is string => x !== null),
+  // The adaptive clarifier step is optional and often empty — no dangling
+  // header when the AI had nothing to ask.
+  const answered = brief.clarifications.filter((c) => c.answer.trim().length > 0);
+  if (answered.length > 0) {
+    parts.push(
+      section(
+        '### Clarifications',
+        answered.map((c) => `**${c.question}**\n\n${c.answer}`).join('\n\n'),
       ),
-    ),
-  );
+    );
+  }
 
-  parts.push(
-    section(
-      '### Integrations & workloads',
-      bulletList(
-        [
-          integrations.integrations.length > 0
-            ? `Integrations: ${integrations.integrations.join(', ')}`
-            : null,
-          `Needs realtime: ${integrations.needsRealtime ? 'yes' : 'no'}`,
-          `Needs background jobs: ${integrations.needsBackgroundJobs ? 'yes' : 'no'}`,
-          `Needs file uploads: ${integrations.needsFileUploads ? 'yes' : 'no'}`,
-          integrations.notes ? `Notes: ${integrations.notes}` : null,
-        ].filter((x): x is string => x !== null),
-      ),
-    ),
-  );
+  if (brief.additionalNotes && brief.additionalNotes.trim().length > 0) {
+    parts.push(section('### Additional notes', brief.additionalNotes));
+  }
 
   return joinBlocks(parts);
 }
@@ -417,7 +354,7 @@ export function toMarkdown(doc: PrdDocument): string {
       prdMarkdown(doc),
       architectureMarkdown(doc),
       planMarkdown(doc),
-      answersMarkdown(doc.answers),
+      briefMarkdown(doc.brief),
     ]) + '\n'
   );
 }

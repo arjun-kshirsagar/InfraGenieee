@@ -1,8 +1,7 @@
 /**
  * POST /api/prd/generate
  *
- * Turns a completed questionnaire into a PrdDocument. Pure and synchronous —
- * no external calls, no persistence, no secrets (contract guarantee #6).
+ * Turns a short ProjectBrief into a full PrdDocument via the LLM pipeline.
  *
  * The handler contains NO business logic (docs/api-contracts.md §Conventions):
  * parse → validate → delegate → self-validate output → respond. All mapping to
@@ -10,17 +9,21 @@
  */
 
 import { NextResponse } from 'next/server';
+import { generateRequestSchema, prdDocumentSchema } from '@/types/prd';
 import {
-  generateRequestSchema,
-  prdDocumentSchema,
-} from '@/types/prd';
-import { apiError, ERROR_STATUS, newPrdId, zodIssues } from '@/lib/prd/api';
-import { generatePrdDocument } from '@/lib/prd/generate';
+  apiError,
+  ERROR_STATUS,
+  GENERATION_ERROR_CODE,
+  newPrdId,
+  zodIssues,
+} from '@/lib/prd/api';
+import { generatePrdDocument, GenerationError } from '@/lib/prd/generation';
 
-// PRD generation is CPU-only and must never be statically cached: every
-// request builds a fresh document (new id + timestamp).
+// Generation calls an external model and must never be statically cached.
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// Three sequential LLM calls at ~140 tok/s. 300s is the ceiling, not the norm.
+export const maxDuration = 300;
 
 export async function POST(request: Request): Promise<NextResponse> {
   // 1. Body must be valid JSON.
@@ -43,13 +46,15 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json(err, { status: ERROR_STATUS.validation_error });
   }
 
-  // 3. Delegate to the pure rules engine, then self-validate the output
-  //    (contract guarantee #3) — never return a document that doesn't parse.
+  // 3. Delegate to the generation pipeline, then self-validate the output —
+  //    never return a document that doesn't parse. The min-volume floors live
+  //    in the schema, so this check genuinely enforces them.
   try {
-    const document = generatePrdDocument(
-      parsed.data.answers,
+    const document = await generatePrdDocument(
+      parsed.data.brief,
       newPrdId(),
       new Date().toISOString(),
+      { signal: request.signal },
     );
 
     const check = prdDocumentSchema.safeParse(document);
@@ -62,8 +67,22 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     return NextResponse.json({ document: check.data }, { status: 200 });
-  } catch {
-    // Never leak a stack trace to the client.
+  } catch (error) {
+    // Log server-side (the cause may carry upstream request ids) but never
+    // leak it to the client.
+    console.error('[api/prd/generate] generation failed', error);
+
+    if (error instanceof GenerationError) {
+      const code = GENERATION_ERROR_CODE[error.code] ?? 'generation_failed';
+      const message =
+        code === 'llm_not_configured'
+          ? 'The PRD generator is not configured on this server.'
+          : code === 'llm_unavailable'
+            ? 'The AI service is temporarily unavailable. Please try again.'
+            : 'PRD generation failed.';
+      return NextResponse.json(apiError(code, message), { status: ERROR_STATUS[code] });
+    }
+
     const err = apiError('generation_failed', 'PRD generation failed.');
     return NextResponse.json(err, { status: ERROR_STATUS.generation_failed });
   }

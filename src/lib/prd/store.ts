@@ -3,10 +3,10 @@
  *
  * There is no server persistence in v1 (see docs/architecture.md §4 and
  * docs/api-contracts.md "Client-side persistence"). Generated PRD documents and
- * the in-progress questionnaire draft live in `localStorage`:
+ * the in-progress brief draft live in `localStorage`:
  *
  *   - documents: `infragenie:prd:<id>`
- *   - draft:     `infragenie:prd-draft`
+ *   - draft:     `infragenie:brief-draft`
  *
  * Hard rules this module upholds so it can never crash a caller:
  *   1. SSR-safe. This is imported by client components in an App Router app, so
@@ -15,50 +15,27 @@
  *   2. Every `localStorage` access is wrapped in try/catch (quota exceeded,
  *      Safari private mode, disabled storage) — never throws at the caller.
  *   3. Every read is validated with zod (`prdDocumentSchema` /
- *      `questionnaireDraftSchema`) and returns `null` on mismatch. Stale data
+ *      `projectBriefDraftSchema`) and returns `null` on mismatch. Stale data
  *      written by an older schema version can never crash the app; it is simply
  *      treated as absent.
  */
 
 import {
   prdDocumentSchema,
-  basicsSchema,
-  scaleSchema,
-  budgetSchema,
-  stackSchema,
-  dataModelAnswersSchema,
-  authAnswersSchema,
-  integrationsAnswersSchema,
+  projectBriefDraftSchema,
   type PrdDocument,
-  type QuestionnaireDraft,
+  type ProjectBriefDraft,
 } from '@/types/prd';
-import { z } from 'zod';
 
 const DOC_KEY_PREFIX = 'infragenie:prd:';
-const DRAFT_KEY = 'infragenie:prd-draft';
+const DRAFT_KEY = 'infragenie:brief-draft';
 
 /**
- * A tolerant, deep-partial schema for the in-progress draft.
- *
- * `questionnaireDraftSchema` in the contract is `answers.partial()` — it makes
- * each STEP GROUP optional, but any group that IS present must be COMPLETE
- * (every field valid). Autosave, however, must persist half-filled steps (the
- * user is mid-form). So for draft reads/writes we validate against a deeper
- * partial: each group is optional AND each field within a present group is
- * optional. This still rejects foreign/corrupt JSON and wrong enum/types —
- * "stale data never crashes the app" — while letting a genuinely partial draft
- * round-trip and be resumed. It never touches the shared contract in
- * `src/types/prd.ts`.
+ * The brief draft is already fully-optional in the contract
+ * (`projectBriefDraftSchema`), so autosave can persist a half-typed idea
+ * without a parallel schema. Reads still validate, so stale or foreign JSON
+ * is treated as absent rather than crashing the app.
  */
-const draftStorageSchema = z.object({
-  basics: basicsSchema.partial().optional(),
-  scale: scaleSchema.partial().optional(),
-  budget: budgetSchema.partial().optional(),
-  stack: stackSchema.partial().optional(),
-  dataModel: dataModelAnswersSchema.partial().optional(),
-  auth: authAnswersSchema.partial().optional(),
-  integrations: integrationsAnswersSchema.partial().optional(),
-});
 
 /** Summary row returned by `listDocuments()`. */
 export interface PrdDocumentSummary {
@@ -179,8 +156,8 @@ export function listDocuments(): PrdDocumentSummary[] {
 /* Draft                                                                      */
 /* -------------------------------------------------------------------------- */
 
-/** Persist the in-progress questionnaire draft. No-op on SSR/error. */
-export function saveDraft(draft: QuestionnaireDraft): void {
+/** Persist the in-progress brief draft. No-op on SSR/error. */
+export function saveDraft(draft: ProjectBriefDraft): void {
   const storage = getStorage();
   if (!storage) return;
   try {
@@ -191,10 +168,10 @@ export function saveDraft(draft: QuestionnaireDraft): void {
 }
 
 /**
- * Load the questionnaire draft. Returns `null` if absent, unreadable, not valid
- * JSON, or failing `questionnaireDraftSchema` (stale/foreign data).
+ * Load the brief draft. Returns `null` if absent, unreadable, not valid
+ * JSON, or failing `projectBriefDraftSchema` (stale/foreign data).
  */
-export function loadDraft(): QuestionnaireDraft | null {
+export function loadDraft(): ProjectBriefDraft | null {
   const storage = getStorage();
   if (!storage) return null;
   let raw: string | null;
@@ -206,8 +183,8 @@ export function loadDraft(): QuestionnaireDraft | null {
   if (raw == null) return null;
   const parsed = safeParseJson(raw);
   if (parsed === undefined) return null;
-  const result = draftStorageSchema.safeParse(parsed);
-  return result.success ? (result.data as QuestionnaireDraft) : null;
+  const result = projectBriefDraftSchema.safeParse(parsed);
+  return result.success ? (result.data as ProjectBriefDraft) : null;
 }
 
 /** Remove the persisted draft. No-op on SSR/error. */
