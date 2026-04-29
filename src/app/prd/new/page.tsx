@@ -1,30 +1,24 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
-import { buttonVariants } from '@/components/ui/button';
+import { NewPrdClient } from './new-prd-client';
 
 export const metadata: Metadata = {
   title: 'New PRD — InfraGenie',
-  description: 'Describe your idea and let InfraGenie generate the PRD, architecture and plan.',
+  description:
+    'Describe your idea and answer a few quick questions. InfraGenie reasons out the PRD, architecture and plan for you.',
 };
 
 /**
- * PLACEHOLDER — the old "enter every entity yourself" questionnaire was removed
- * in the AI re-scope. The new lightweight idea + context flow is being built
- * (see docs/feature-1-ai-prd.md). This page exists so the route keeps
- * building; the frontend replaces it wholesale.
+ * `/prd/new` — Feature 1, step 1: the single-screen idea + context input that
+ * replaced the deleted 7-step wizard.
+ *
+ * This server component only renders the client form. The form owns validation,
+ * autosave and the Resume/Start-fresh flow; its `onComplete` seam is where the
+ * downstream clarifier + generate flow (F3/F4) hooks in.
  */
 export default function NewPrdPage() {
   return (
-    <main className="mx-auto flex min-h-[60vh] max-w-2xl flex-col items-center justify-center gap-4 px-6 text-center">
-      <h1 className="text-2xl font-semibold tracking-tight">The idea input is being rebuilt</h1>
-      <p className="text-muted-foreground text-sm">
-        InfraGenie now asks for your idea and a little context, then reasons out the entities,
-        architecture and plan for you — instead of making you fill in a long form. That new flow is
-        under construction.
-      </p>
-      <Link href="/" className={buttonVariants({ variant: 'outline' })}>
-        Back to home
-      </Link>
+    <main className="w-full px-4 py-10 sm:px-6 sm:py-14">
+      <NewPrdClient />
     </main>
   );
 }

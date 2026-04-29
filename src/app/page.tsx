@@ -14,8 +14,8 @@ export default function Home() {
             Plan your product before you build it.
           </h1>
           <p className="text-lg text-muted-foreground text-pretty">
-            InfraGenie asks the questions that matter — scale, traffic, budget, stack,
-            data model, auth, and integrations — then generates a PRD, an architecture,
+            Describe your idea and answer a few quick questions — scale, traffic, budget,
+            timeline. InfraGenie&apos;s AI reasons out the entities, requirements, architecture,
             and a task breakdown you can actually ship against.
           </p>
         </div>
@@ -28,12 +28,12 @@ export default function Home() {
 
         <ul className="mt-4 grid w-full gap-3 text-left text-sm text-muted-foreground sm:grid-cols-3">
           <li className="rounded-lg border bg-background p-4">
-            <span className="block font-medium text-foreground">1. Answer</span>
-            A guided 7-step questionnaire captures your requirements.
+            <span className="block font-medium text-foreground">1. Describe</span>
+            Write your idea in a sentence or two and set a little context.
           </li>
           <li className="rounded-lg border bg-background p-4">
             <span className="block font-medium text-foreground">2. Generate</span>
-            A deterministic engine turns answers into a structured plan.
+            The AI infers the data model, architecture and plan for you.
           </li>
           <li className="rounded-lg border bg-background p-4">
             <span className="block font-medium text-foreground">3. Build</span>
