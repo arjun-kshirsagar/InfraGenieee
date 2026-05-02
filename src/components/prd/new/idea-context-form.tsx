@@ -122,19 +122,24 @@ export function IdeaContextForm({ onComplete }: IdeaContextFormProps) {
   }, [hydrated, resumePrompt, setFocus]);
 
   // ---- Debounced autosave --------------------------------------------------
-  const values = watch();
+  // Subscribe to changes rather than reading watch() during render — the
+  // subscription form is memo-safe and only fires on actual edits.
   React.useEffect(() => {
     // Don't autosave until the user has dismissed/decided the resume banner,
     // otherwise we'd overwrite the saved draft with the defaults on mount.
     if (!hydrated || resumePrompt) return;
-    const handle = window.setTimeout(() => {
-      saveDraft(formValuesToDraft(values));
-    }, AUTOSAVE_DEBOUNCE_MS);
-    return () => window.clearTimeout(handle);
-    // watch() returns a fresh object each render; stringify keeps the effect
-    // stable and only re-fires when the content actually changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(values), hydrated, resumePrompt]);
+    let handle: number | undefined;
+    const subscription = watch((formValues) => {
+      if (handle) window.clearTimeout(handle);
+      handle = window.setTimeout(() => {
+        saveDraft(formValuesToDraft(formValues as IdeaContextFormValues));
+      }, AUTOSAVE_DEBOUNCE_MS);
+    });
+    return () => {
+      if (handle) window.clearTimeout(handle);
+      subscription.unsubscribe();
+    };
+  }, [watch, hydrated, resumePrompt]);
 
   const ideaValue = watch('idea') ?? '';
   const guidance = ideaGuidance(ideaValue.trim().length);
@@ -153,6 +158,8 @@ export function IdeaContextForm({ onComplete }: IdeaContextFormProps) {
       setFocus('context.timelineWeeks');
     }
   };
+
+  const submit = handleSubmit(onValid, onInvalid);
 
   function handleResume() {
     if (resumePrompt) reset(resumePrompt);
@@ -200,7 +207,7 @@ export function IdeaContextForm({ onComplete }: IdeaContextFormProps) {
 
       <form
         noValidate
-        onSubmit={handleSubmit(onValid, onInvalid)}
+        onSubmit={submit}
         className="flex flex-col gap-6"
         aria-hidden={resumePrompt ? true : undefined}
       >
@@ -421,7 +428,20 @@ export function IdeaContextForm({ onComplete }: IdeaContextFormProps) {
         </Card>
 
         <div className="flex justify-end">
-          <Button type="submit" size="lg" disabled={isSubmitting} className="gap-2">
+          <Button
+            type="submit"
+            size="lg"
+            disabled={isSubmitting}
+            className="gap-2"
+            onClick={(e) => {
+              // base-ui's Button does not reliably dispatch a native form
+              // submit on click, so trigger react-hook-form's handler
+              // explicitly. `preventDefault` keeps a double-submit from a
+              // native event that may also fire.
+              e.preventDefault();
+              void submit();
+            }}
+          >
             Continue
             <ArrowRight className="size-4" />
           </Button>
