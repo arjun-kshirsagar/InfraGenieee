@@ -127,15 +127,21 @@ export type GeneratePlanStage = (
  * @throws {GenerationError}
  */
 export async function generateClarifyingQuestions(
-  _idea: string,
-  _context: BriefContext,
-  _options?: { model?: string; signal?: AbortSignal },
+  idea: string,
+  context: BriefContext,
+  options?: { model?: string; signal?: AbortSignal },
 ): Promise<ClarifyQuestion[]> {
-  throw new GenerationError(
-    'not_implemented',
-    'Clarifying-question generation is not implemented yet.',
-    { stage: 'clarify' },
-  );
+  // Implemented in the clarify stage (src/lib/prd/llm/stages/clarify.ts). The
+  // stage resolves the fast model, builds the restraint-heavy prompt, and
+  // returns 0–3 schema-validated questions. All failures surface as
+  // GenerationError from the client, so this seam adds no error handling of its
+  // own — the route owns the mapping to HTTP.
+  //
+  // Imported lazily to keep the module graph acyclic at load time: the stage
+  // imports DEFAULT_CLARIFY_MODEL from this file, so a top-level import here
+  // would close the cycle.
+  const { runClarifyStage } = await import('@/lib/prd/llm/stages/clarify');
+  return runClarifyStage(idea, context, options);
 }
 
 /**
