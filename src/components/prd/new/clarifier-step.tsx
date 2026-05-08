@@ -184,8 +184,8 @@ export function ClarifierStep({
           </div>
           <p className="text-muted-foreground text-sm">
             InfraGenie wants to nail a few things before it designs your product. Every question is
-            optional — <span className="font-medium">skip anything</span> and it&apos;ll make a
-            sensible assumption and tell you what it decided.
+            optional — <span className="font-medium">skip anything</span>{' '}
+            and it&apos;ll make a sensible assumption and tell you what it decided.
           </p>
         </header>
 
