@@ -161,12 +161,15 @@ export async function generateClarifyingQuestions(
  * @throws {GenerationError}
  */
 export async function generatePrdDocument(
-  _brief: ProjectBrief,
-  _id: string,
-  _createdAt: string,
-  _options?: GenerateOptions,
+  brief: ProjectBrief,
+  id: string,
+  createdAt: string,
+  options?: GenerateOptions,
 ): Promise<PrdDocument> {
-  throw new GenerationError('not_implemented', 'PRD generation is not implemented yet.', {
-    stage: 'prd',
-  });
+  // Dynamic import breaks the import cycle: the pipeline module imports the
+  // types and `GenerationError` from this seam file, so a top-level import here
+  // would be circular. The pipeline is server-only and this seam is only ever
+  // reached from a route handler, so the deferred import is free.
+  const { runGenerationPipeline } = await import('@/lib/prd/llm/pipeline');
+  return runGenerationPipeline(brief, id, createdAt, options);
 }
