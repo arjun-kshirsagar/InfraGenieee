@@ -245,6 +245,24 @@ export function PrdTab({ prd }: { prd: PrdSection }) {
           <Empty>No open questions.</Empty>
         )}
       </DocSection>
+
+      {/* Assumptions — what the AI decided where the brief was silent. Rendered
+          like Open questions, but framed so the user understands these are
+          decisions made on their behalf that they can push back on. */}
+      <DocSection
+        title="Assumptions"
+        description="Decisions the AI made where your brief was silent — review these."
+      >
+        {prd.assumptions.length > 0 ? (
+          <ul className="ml-4 list-disc space-y-1.5">
+            {prd.assumptions.map((a, i) => (
+              <li key={i}>{a}</li>
+            ))}
+          </ul>
+        ) : (
+          <Empty>No assumptions recorded.</Empty>
+        )}
+      </DocSection>
     </div>
   );
 }
