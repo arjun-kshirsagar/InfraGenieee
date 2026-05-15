@@ -199,6 +199,81 @@ export function isPurelyUnderVolume(error: z.ZodError): boolean {
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* Stringified-array coercion (recover a paid generation, zero extra calls)    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Some model runs return a container field as a JSON-**stringified** array
+ * (e.g. `milestones: "[{...}]"`) instead of a real array. The content is
+ * correct — only the envelope is wrong — so the whole generation is fully
+ * recoverable with a single `JSON.parse()` at the offending path. Zod reports
+ * this as an `invalid_type` issue with `expected: 'array'` on a value that is a
+ * string, which the under-volume detector (rightly) does NOT classify as
+ * retryable. Rather than discard a complete, already-paid-for generation, we
+ * repair it in place before declaring the stage terminal.
+ *
+ * Observed live twice on real generations (plan.milestones, prd.functional-
+ * Requirements); see MAJOR-1 in docs/qa-feature-1.md.
+ *
+ * This is a single, bounded, deterministic repair — NOT a retry. It makes no
+ * upstream call and never loops: each candidate path is parsed at most once.
+ */
+export interface CoercionResult {
+  /** A shallow-cloned copy of `value` with parseable string arrays replaced. */
+  coerced: unknown;
+  /** Dotted paths that were successfully JSON.parse()'d into arrays. */
+  paths: string[];
+}
+
+/**
+ * Detect and repair JSON-stringified arrays reported by a failed zod parse.
+ *
+ * For every issue that is `invalid_type` expecting an `array` where the value
+ * at that path is actually a `string`, attempt exactly one `JSON.parse()`. If
+ * it yields an array, set it back on a cloned copy of `value`. Returns the
+ * repaired copy and the list of repaired paths, or `null` when nothing was
+ * coercible (so the caller falls through to its normal terminal handling).
+ *
+ * The parse is defensive: a string that doesn't parse, or parses to a non-array,
+ * is left untouched — we never fabricate structure the model didn't emit.
+ */
+export function coerceStringifiedArrays(
+  error: z.ZodError,
+  value: unknown,
+): CoercionResult | null {
+  const candidates: PropertyKey[][] = [];
+  for (const issue of error.issues) {
+    const isArrayTypeMiss =
+      issue.code === 'invalid_type' &&
+      (issue as { expected?: string }).expected === 'array';
+    if (!isArrayTypeMiss) continue;
+    const at = getAtPath(value, issue.path);
+    if (typeof at !== 'string') continue;
+    candidates.push(issue.path);
+  }
+  if (candidates.length === 0) return null;
+
+  let working = value;
+  const paths: string[] = [];
+  for (const path of candidates) {
+    const raw = getAtPath(working, path);
+    if (typeof raw !== 'string') continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue; // not valid JSON — leave it, this path stays broken
+    }
+    if (!Array.isArray(parsed)) continue; // parsed to something else — don't touch
+    working = setAtPath(working, path, parsed);
+    paths.push(path.map(String).join('.'));
+  }
+
+  if (paths.length === 0) return null;
+  return { coerced: working, paths };
+}
+
 /** Build the targeted retry instruction the stage appends as a follow-up. */
 export function buildRetryInstruction(shortfalls: VolumeShortfall[]): string {
   const lines = shortfalls.map((s) =>
@@ -226,6 +301,30 @@ function getAtPath(root: unknown, path: PropertyKey[]): unknown {
     cur = (cur as Record<PropertyKey, unknown>)[key];
   }
   return cur;
+}
+
+/**
+ * Return a copy of `root` with the value at `path` replaced by `next`, cloning
+ * only the objects/arrays along the path (structural sharing elsewhere). Never
+ * mutates the input. Used by `coerceStringifiedArrays` so the raw model output
+ * is left intact for logging while a repaired copy is re-validated.
+ */
+function setAtPath(root: unknown, path: PropertyKey[], next: unknown): unknown {
+  if (path.length === 0) return next;
+  const [head, ...rest] = path;
+  const child =
+    root != null && typeof root === 'object'
+      ? (root as Record<PropertyKey, unknown>)[head]
+      : undefined;
+  const nextChild = setAtPath(child, rest, next);
+  if (Array.isArray(root)) {
+    const clone = [...(root as unknown[])] as unknown[];
+    clone[head as number] = nextChild;
+    return clone;
+  }
+  const clone: Record<PropertyKey, unknown> = { ...(root as Record<PropertyKey, unknown>) };
+  clone[head] = nextChild;
+  return clone;
 }
 
 /** Map a dotted zod path to a readable noun for the retry prompt. */
@@ -313,16 +412,50 @@ export async function runStage<T>(opts: RunStageOptions<T>): Promise<T> {
   const parsed1 = opts.schema.safeParse(raw1);
   if (parsed1.success) return parsed1.data;
 
+  // Recover a JSON-stringified container field WITHOUT a second call. A model
+  // that returned e.g. `milestones: "[...]"` produced correct content in a
+  // wrong envelope; JSON.parse()-ing the offending path(s) once and re-
+  // validating salvages the whole (already-paid-for) generation. Bounded and
+  // non-looping: each path is parsed at most once, no upstream call is made.
+  //
+  // If the coerced value validates, we're done in one call. If it still fails,
+  // the envelope was fixed but the content is genuinely off (e.g. also under-
+  // volume) — we adopt the coerced value + its error as the basis for the
+  // normal under-volume/terminal handling, so the single retry (if any) feeds
+  // back an envelope-correct assistant turn rather than the stringified one.
+  let effectiveOutput: unknown = raw1;
+  let effectiveError: z.ZodError = parsed1.error;
+  const coercion = coerceStringifiedArrays(parsed1.error, raw1);
+  if (coercion) {
+    const reparsed = opts.schema.safeParse(coercion.coerced);
+    if (reparsed.success) {
+      console.info(
+        '[prd.llm] stage=%s recovered stringified-array field(s) via JSON.parse (no retry): %s',
+        opts.stage,
+        coercion.paths.join(', '),
+      );
+      return reparsed.data;
+    }
+    console.info(
+      '[prd.llm] stage=%s coerced stringified-array field(s) but content still invalid; ' +
+        'continuing with the repaired envelope: %s',
+      opts.stage,
+      coercion.paths.join(', '),
+    );
+    effectiveOutput = coercion.coerced;
+    effectiveError = reparsed.error;
+  }
+
   // Only extend-retry a pure under-volume miss. Anything structural is terminal.
-  if (!isPurelyUnderVolume(parsed1.error)) {
+  if (!isPurelyUnderVolume(effectiveError)) {
     throw new GenerationError(
       'invalid_output',
-      `Stage "${opts.stage}" output failed schema validation: ${summarizeIssues(parsed1.error)}`,
+      `Stage "${opts.stage}" output failed schema validation: ${summarizeIssues(effectiveError)}`,
       { stage: opts.stage },
     );
   }
 
-  const shortfalls = describeVolumeShortfalls(parsed1.error, raw1);
+  const shortfalls = describeVolumeShortfalls(effectiveError, effectiveOutput);
   console.info(
     '[prd.llm] stage=%s under-volume on first attempt (%s); issuing exactly one extend-retry',
     opts.stage,
@@ -337,7 +470,7 @@ export async function runStage<T>(opts: RunStageOptions<T>): Promise<T> {
     system: opts.system,
     messages: [
       ...opts.messages,
-      { role: 'assistant', content: JSON.stringify(raw1) },
+      { role: 'assistant', content: JSON.stringify(effectiveOutput) },
       { role: 'user', content: buildRetryInstruction(shortfalls) },
     ],
     toolName: opts.toolName,
@@ -351,6 +484,21 @@ export async function runStage<T>(opts: RunStageOptions<T>): Promise<T> {
 
   const parsed2 = opts.schema.safeParse(raw2);
   if (parsed2.success) return parsed2.data;
+
+  // The retry can also fumble the envelope — recover a stringified array here
+  // too. Still zero extra calls; still not a second retry.
+  const coercion2 = coerceStringifiedArrays(parsed2.error, raw2);
+  if (coercion2) {
+    const reparsed2 = opts.schema.safeParse(coercion2.coerced);
+    if (reparsed2.success) {
+      console.info(
+        '[prd.llm] stage=%s recovered stringified-array field(s) via JSON.parse on retry (no further call): %s',
+        opts.stage,
+        coercion2.paths.join(', '),
+      );
+      return reparsed2.data;
+    }
+  }
 
   // One retry, and it still failed. Stop — do not loop.
   throw new GenerationError(

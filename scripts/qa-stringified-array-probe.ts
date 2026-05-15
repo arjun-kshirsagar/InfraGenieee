@@ -73,7 +73,6 @@ async function main() {
   const { generatePlanSection } = await import('../src/lib/prd/llm/stages/plan');
   const { isPurelyUnderVolume } = await import('../src/lib/prd/llm/shared');
   const { planDraftSchema } = await import('../src/types/prd');
-  const { GenerationError } = await import('../src/lib/prd/generation');
 
   const brief = {
     idea: 'A marketplace where scuba instructors list open boat-trip seats and divers book them.',
@@ -116,25 +115,41 @@ async function main() {
     recovered.success ? `${recovered.data.milestones.flatMap((m) => m.tasks).length} tasks` : 'no',
   );
 
-  console.log('\n=== 3. End to end: the whole stage dies on the first call, no retry ===');
+  console.log('\n=== 3. End to end: the stage now RECOVERS the stringified array in one call, no retry ===');
+  // FIXED (MAJOR-1): runStage coerces a JSON-stringified container field via a
+  // single JSON.parse() and re-validates — salvaging the already-paid-for
+  // generation instead of discarding it. This is NOT a retry: still exactly one
+  // upstream call. Before the fix this branch threw invalid_output; the probe's
+  // expectation is updated to the corrected behaviour (not deleted).
   mode = 'stringified';
   upstreamCalls = 0;
   let err: unknown;
+  let recoveredMs: unknown;
   try {
-    await generatePlanSection(ctx);
+    recoveredMs = await generatePlanSection(ctx);
   } catch (e) {
     err = e;
   }
-  check('generatePlanSection throws', err instanceof GenerationError, (err as Error)?.message?.slice(0, 120));
-  check('code is invalid_output', (err as { code?: string })?.code === 'invalid_output', (err as { code?: string })?.code);
+  check('generatePlanSection no longer throws (stringified array recovered)', err === undefined, err ? (err as Error)?.message?.slice(0, 120) : 'ok');
   check(
-    'NO retry was attempted (exactly 1 upstream call)',
-    upstreamCalls === 1,
-    `${upstreamCalls} upstream call(s) — a retry would have been 2`,
+    'recovered plan is a valid 3-milestone / 15-task array',
+    Array.isArray(recoveredMs) &&
+      (recoveredMs as unknown[]).length === 3 &&
+      (recoveredMs as { tasks: unknown[] }[]).flatMap((m) => m.tasks).length === 15,
+    Array.isArray(recoveredMs)
+      ? `${(recoveredMs as unknown[]).length} milestones, ${(recoveredMs as { tasks: unknown[] }[]).flatMap((m) => m.tasks).length} tasks`
+      : 'not an array',
   );
+  check(
+    'STILL exactly 1 upstream call (coercion is not a retry)',
+    upstreamCalls === 1,
+    `${upstreamCalls} upstream call(s) — a mechanical retry would have been 2`,
+  );
+  void err; // referenced above; keep for clarity
   console.log(
-    '\n  → In production this arrives AFTER stages 1+2 already succeeded and were paid for.\n' +
-      '    Observed live: 242s of generation discarded, user sees 500 generation_failed.',
+    '\n  → In production this now completes instead of discarding ~$0.42 / 242s of\n' +
+      '    already-billed generation. The model\'s content was correct; only its\n' +
+      '    envelope (a stringified array) was wrong, and JSON.parse() fixes that.',
   );
 
   console.log('\n=== 4. Control: a well-shaped response succeeds on the first call ===');

@@ -20,6 +20,7 @@ vi.mock('@/lib/prd/llm/client', () => ({
 
 import {
   buildRetryInstruction,
+  coerceStringifiedArrays,
   describeVolumeShortfalls,
   formatBrief,
   isPurelyUnderVolume,
@@ -81,6 +82,81 @@ describe('under-volume detection', () => {
     expect(msg).toContain('6 functional requirements');
     expect(msg).toContain('minimum is 8');
     expect(msg).toContain('at least 8');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Stringified-array coercion (MAJOR-1 regression)                            */
+/* -------------------------------------------------------------------------- */
+
+describe('coerceStringifiedArrays', () => {
+  it('recovers a top-level JSON-stringified array (plan.milestones shape)', () => {
+    // The exact live failure: a whole container field arrives as a string.
+    const schema = z.object({ milestones: z.array(z.object({ id: z.string() })).min(1) });
+    const raw = { milestones: JSON.stringify([{ id: 'M1' }, { id: 'M2' }, { id: 'M3' }]) };
+    const err = schema.safeParse(raw);
+    expect(err.success).toBe(false);
+    if (err.success) return;
+
+    // It is (correctly) NOT under-volume — it's an invalid_type miss.
+    expect(isPurelyUnderVolume(err.error)).toBe(false);
+
+    const result = coerceStringifiedArrays(err.error, raw);
+    expect(result).not.toBeNull();
+    expect(result?.paths).toEqual(['milestones']);
+    // The repaired copy now validates...
+    expect(schema.safeParse(result?.coerced).success).toBe(true);
+    // ...and the ORIGINAL raw object was not mutated.
+    expect(typeof raw.milestones).toBe('string');
+  });
+
+  it('recovers a stringified prd.functionalRequirements (the F3 sighting)', () => {
+    const schema = z.object({
+      functionalRequirements: z.array(z.string()).min(3),
+    });
+    const raw = {
+      functionalRequirements: JSON.stringify(['FR-1', 'FR-2', 'FR-3', 'FR-4']),
+    };
+    const err = schema.safeParse(raw);
+    if (err.success) return;
+    const result = coerceStringifiedArrays(err.error, raw);
+    expect(result?.paths).toEqual(['functionalRequirements']);
+    expect(schema.safeParse(result?.coerced).success).toBe(true);
+  });
+
+  it('repairs a nested stringified array without touching siblings', () => {
+    const schema = z.object({
+      dataModel: z.object({ entities: z.array(z.string()).min(1) }),
+    });
+    const raw = { dataModel: { entities: JSON.stringify(['User', 'Order']) } };
+    const err = schema.safeParse(raw);
+    if (err.success) return;
+    const result = coerceStringifiedArrays(err.error, raw);
+    expect(result?.paths).toEqual(['dataModel.entities']);
+    expect(schema.safeParse(result?.coerced).success).toBe(true);
+  });
+
+  it('returns null when nothing is a stringified array (a real structural error)', () => {
+    const schema = z.object({ kind: z.enum(['a', 'b']) });
+    const err = schema.safeParse({ kind: 'zzz' });
+    if (err.success) return;
+    expect(coerceStringifiedArrays(err.error, { kind: 'zzz' })).toBeNull();
+  });
+
+  it('leaves a non-JSON string untouched (returns null, no fabrication)', () => {
+    const schema = z.object({ items: z.array(z.string()).min(1) });
+    const raw = { items: 'not json at all' };
+    const err = schema.safeParse(raw);
+    if (err.success) return;
+    expect(coerceStringifiedArrays(err.error, raw)).toBeNull();
+  });
+
+  it('leaves a string that parses to a non-array untouched', () => {
+    const schema = z.object({ items: z.array(z.string()).min(1) });
+    const raw = { items: JSON.stringify({ not: 'an array' }) };
+    const err = schema.safeParse(raw);
+    if (err.success) return;
+    expect(coerceStringifiedArrays(err.error, raw)).toBeNull();
   });
 });
 
@@ -153,6 +229,35 @@ describe('runStage', () => {
       new GenerationError('unavailable', 'upstream 503', { stage: 'prd' }),
     );
     await expect(runStage(baseStageOpts)).rejects.toMatchObject({ code: 'unavailable' });
+    expect(callStructured).toHaveBeenCalledOnce();
+  });
+
+  /* MAJOR-1: stringified-array recovery — no extra upstream call. */
+
+  it('recovers a JSON-stringified array in ONE call — no retry, no throw', async () => {
+    // The model returned correct content in a wrong envelope.
+    callStructured.mockResolvedValueOnce({ items: JSON.stringify(['a', 'b', 'c']) });
+    const out = await runStage(baseStageOpts);
+    expect(out).toEqual({ items: ['a', 'b', 'c'] });
+    // Crucially: exactly one upstream call. Coercion is NOT a retry.
+    expect(callStructured).toHaveBeenCalledOnce();
+  });
+
+  it('after coercion, a still-under-volume result gets the ONE extend-retry', async () => {
+    // Stringified AND short (2 items, need 3): coercion fixes the envelope, then
+    // the normal under-volume path issues exactly one retry, which succeeds.
+    callStructured
+      .mockResolvedValueOnce({ items: JSON.stringify(['a', 'b']) }) // string + short
+      .mockResolvedValueOnce({ items: ['a', 'b', 'c', 'd'] }); // fixed on retry
+    const out = await runStage(baseStageOpts);
+    expect(out).toEqual({ items: ['a', 'b', 'c', 'd'] });
+    expect(callStructured).toHaveBeenCalledTimes(2); // one retry, never more
+  });
+
+  it('a stringified array with genuinely bad content throws — never loops', async () => {
+    // A string that parses to a non-array can't be coerced; it stays structural.
+    callStructured.mockResolvedValueOnce({ items: JSON.stringify({ not: 'array' }) });
+    await expect(runStage(baseStageOpts)).rejects.toMatchObject({ code: 'invalid_output' });
     expect(callStructured).toHaveBeenCalledOnce();
   });
 });
