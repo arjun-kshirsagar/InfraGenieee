@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge';
 
 /**
  * Compact table rendering of an entity's fields. Shared by the Architecture
- * data-model view and the questionnaire-answers echo.
+ * data-model view and the brief echo.
  */
 export function EntityCard({ entity }: { entity: Entity }) {
   return (

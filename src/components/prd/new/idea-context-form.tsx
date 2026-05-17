@@ -72,6 +72,15 @@ const AUTOSAVE_DEBOUNCE_MS = 600;
 export interface IdeaContextFormProps {
   /** Called with the validated idea + context when the user clicks Continue. */
   onComplete: (brief: BriefStepOneResult) => void;
+  /**
+   * When provided, seed the form with these values and skip the
+   * Resume/Start-fresh gate entirely. Used by the in-app "Edit brief" path
+   * (returning from a failed generation): the brief is already in memory, so
+   * showing the resume interstitial — which implies the draft might be gone —
+   * is both redundant and contradicts the "nothing you typed was lost" copy.
+   * A fresh page load passes nothing and gets the normal resume detection.
+   */
+  initialValues?: IdeaContextFormValues;
 }
 
 /** Small inline field-error line. Renders nothing when there's no message. */
@@ -84,9 +93,11 @@ function FieldError({ id, message }: { id: string; message?: string }) {
   );
 }
 
-export function IdeaContextForm({ onComplete }: IdeaContextFormProps) {
+export function IdeaContextForm({ onComplete, initialValues }: IdeaContextFormProps) {
   // Resume/Start-fresh state. We read the draft once on mount (client-only) so
   // SSR markup matches the initial defaults and we avoid a hydration mismatch.
+  // When `initialValues` is supplied (the in-app "Edit brief" path) we seed the
+  // form directly and never show the resume banner — the data is already here.
   const [resumePrompt, setResumePrompt] = React.useState<IdeaContextFormValues | null>(null);
   const [hydrated, setHydrated] = React.useState(false);
 
@@ -100,19 +111,25 @@ export function IdeaContextForm({ onComplete }: IdeaContextFormProps) {
     formState: { errors, isSubmitting },
   } = useForm<IdeaContextFormValues>({
     resolver: zodResolver(ideaContextFormSchema),
-    defaultValues: defaultFormValues(),
+    defaultValues: initialValues ?? defaultFormValues(),
     mode: 'onSubmit',
     reValidateMode: 'onChange',
   });
 
   // ---- Resume detection (runs once, client-side) --------------------------
+  // Skipped entirely when seeded with `initialValues`: mark hydrated so autosave
+  // and autofocus kick in, but never surface a Resume/Start-fresh prompt.
   React.useEffect(() => {
+    if (initialValues) {
+      setHydrated(true);
+      return;
+    }
     const draft = loadDraft();
     if (draftHasContent(draft)) {
       setResumePrompt(draftToFormValues(draft));
     }
     setHydrated(true);
-  }, []);
+  }, [initialValues]);
 
   // ---- Autofocus the idea once we know we're not showing the resume banner -
   React.useEffect(() => {

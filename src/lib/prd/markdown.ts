@@ -246,7 +246,7 @@ function planMarkdown(doc: PrdDocument): string {
 
   parts.push('## Delivery plan');
   parts.push(
-    `**Total estimate:** ${plan.totalEstimateHours} h · **Calendar estimate:** ${plan.estimatedCalendarWeeks} weeks`,
+    `**Total estimate:** ${plan.totalEstimateHours} h · **Calendar estimate:** ${plan.estimatedCalendarWeeks} weeks (assuming ~3 people)`,
   );
 
   const critical = new Set(plan.criticalPath);

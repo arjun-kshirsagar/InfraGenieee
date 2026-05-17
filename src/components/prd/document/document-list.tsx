@@ -57,7 +57,7 @@ export function DocumentList() {
             <div className="flex flex-col gap-1">
               <p className="font-medium">No documents yet</p>
               <p className="text-sm text-muted-foreground">
-                Answer the questionnaire to generate your first PRD, architecture, and plan.
+                Describe your idea and the AI writes your first PRD, architecture, and plan.
               </p>
             </div>
             <Link href="/prd/new" className={buttonVariants({ variant: 'outline' })}>

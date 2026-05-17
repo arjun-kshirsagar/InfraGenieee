@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "InfraGenie — Plan & ship your product",
   description:
-    "InfraGenie turns a short questionnaire into a PRD, an architecture, and a task plan — then helps you ship it.",
+    "InfraGenie turns a short description of your idea into a PRD, an architecture, and a task plan — then helps you ship it.",
 };
 
 export default function RootLayout({

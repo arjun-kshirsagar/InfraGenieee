@@ -13,6 +13,15 @@ const AREA_LABEL: Record<PlanTask['area'], string> = {
   qa: 'qa',
 };
 
+/**
+ * The team size the calendar-week estimate assumes. `estimatedCalendarWeeks` is
+ * derived server-side from `DEFAULT_TEAM_SIZE` in `src/lib/prd/llm/pipeline.ts`;
+ * that module is backend-owned and off-limits to client components, so we mirror
+ * the value here purely to surface the assumption in the UI. Presentation only —
+ * this does not feed the maths. Keep in sync with the pipeline constant.
+ */
+const ASSUMED_TEAM_SIZE = 3;
+
 function TaskCard({
   task,
   isCritical,
@@ -95,6 +104,9 @@ export function PlanTab({ plan }: { plan: PlanSection }) {
             </span>
             <span className="text-2xl font-semibold">
               {plan.estimatedCalendarWeeks} weeks
+            </span>
+            <span className="text-xs text-muted-foreground">
+              assuming ~{ASSUMED_TEAM_SIZE} people
             </span>
           </CardContent>
         </Card>

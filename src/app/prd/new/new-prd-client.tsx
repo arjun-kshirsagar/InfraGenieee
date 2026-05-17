@@ -28,13 +28,13 @@ import * as React from 'react';
 import { IdeaContextForm } from '@/components/prd/new/idea-context-form';
 import { ClarifierStep } from '@/components/prd/new/clarifier-step';
 import { GeneratingStep } from '@/components/prd/new/generating-step';
-import type { BriefStepOneResult } from '@/lib/prd/brief-form';
+import type { BriefStepOneResult, IdeaContextFormValues } from '@/lib/prd/brief-form';
 import type { ClarifyInput } from '@/lib/prd/clarify-flow';
 import type { Clarification, ProjectBrief } from '@/types/prd';
 import { loadDraft, saveDraft } from '@/lib/prd/store';
 
 type Stage =
-  | { name: 'form' }
+  | { name: 'form'; initialValues?: IdeaContextFormValues }
   | { name: 'clarify'; input: ClarifyInput }
   | { name: 'done'; brief: ProjectBrief };
 
@@ -89,11 +89,21 @@ export function NewPrdClient() {
     return (
       <GeneratingStep
         brief={stage.brief}
-        onEditBrief={() => setStage({ name: 'form' })}
+        onEditBrief={() =>
+          // The brief is already in memory — seed the form with it and bypass
+          // the Resume/Start-fresh gate (that gate is for a fresh page load).
+          setStage({
+            name: 'form',
+            initialValues: {
+              idea: stage.brief.idea,
+              context: stage.brief.context,
+            },
+          })
+        }
       />
     );
   }
 
-  return <IdeaContextForm onComplete={handleStepOne} />;
+  return <IdeaContextForm onComplete={handleStepOne} initialValues={stage.initialValues} />;
 }
 
