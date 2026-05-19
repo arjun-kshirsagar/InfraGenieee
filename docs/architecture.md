@@ -119,6 +119,7 @@ add server persistence, and the route contracts don't change when we do.
 | Validation | zod at every boundary | one definition, client + server |
 | Enums vs free text | buckets for scale/budget | keeps Feature 2 cost math comparable |
 | Diagrams | Mermaid source, **derived in TS** | models emit broken Mermaid; kinds are enum-constrained so ours is always valid |
+| Diagram edge direction | caller → callee, chosen by component `kind` | every `client` points AT the service (not just the first) and a `cdn` points at every client; deriving direction from `kind` is what stops multi-UI products from getting backwards arrows |
 | LLM output | forced tool use (`tool_choice`) | guaranteed schema-shaped JSON; we never parse prose |
 | Quality floors | zod `.min()`, not prose | prose floors shipped broken in 18/24 combos |
 | Secrets | server-side env only, never in `NEXT_PUBLIC_*` | Feature 3 will hold provider tokens |

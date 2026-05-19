@@ -41,8 +41,17 @@ export function mermaidLabel(label: string): string {
  * derive edges from component KINDS, which the schema constrains to a known
  * enum, so the output is always syntactically valid.
  *
- * Topology: cdn → client → service → {datastore, cache, queue, external},
- * and queue → datastore when both exist.
+ * Topology (edges point in the direction a request flows, i.e. caller → callee):
+ *   - every `cdn` → every `client` ("edge cache")
+ *   - EVERY `client` → the anchor service ("HTTPS") — not just the first, so a
+ *     product with several UI surfaces (admin console, patient portal, mobile)
+ *     gets correct inbound edges instead of falling through to the orphan
+ *     rescue below and being drawn backwards.
+ *   - anchor service → {datastore, cache, queue, external}
+ *   - queue → datastore when both exist
+ *   - anything still unconnected is attached by KIND, never blindly outward
+ *     from the anchor: clients/cdns call inward, everything else is called by
+ *     the anchor.
  */
 export function buildArchitectureMermaid(
   projectName: string,
@@ -73,12 +82,13 @@ export function buildArchitectureMermaid(
   }
 
   const first = (kind: ArchitectureComponent['kind']) => components.find((c) => c.kind === kind);
-  const client = first('client');
+  const all = (kind: ArchitectureComponent['kind']) => components.filter((c) => c.kind === kind);
+  const clients = all('client');
+  const cdns = all('cdn');
   const service = first('service');
   const datastore = first('datastore');
   const cache = first('cache');
   const queue = first('queue');
-  const cdn = first('cdn');
 
   const seenEdges = new Set<string>();
   const edge = (a?: ArchitectureComponent, b?: ArchitectureComponent, label?: string) => {
@@ -91,8 +101,19 @@ export function buildArchitectureMermaid(
     lines.push(label ? `  ${idA} -->|${mermaidLabel(label)}| ${idB}` : `  ${idA} --> ${idB}`);
   };
 
-  if (cdn && client) edge(cdn, client, 'edge cache');
-  edge(client, service, 'HTTPS');
+  // What a client calls. Normally the primary service; with no service at all
+  // (BaaS / serverless-data shape) the clients talk to the datastore directly.
+  const inward = service ?? datastore;
+  const inwardLabel = service ? 'HTTPS' : 'read/write';
+
+  // A CDN fronts the browser, so it points AT the clients, and at every client:
+  // static delivery is not specific to one UI surface.
+  for (const c of cdns) {
+    for (const cl of clients) edge(c, cl, 'edge cache');
+  }
+  // EVERY client calls inward — not just the first. A product with an admin
+  // console plus an end-user portal must show both arrows pointing at the API.
+  for (const cl of clients) edge(cl, inward, inwardLabel);
   edge(service, datastore, 'read/write');
   edge(service, cache, 'cache');
   edge(service, queue, 'enqueue');
@@ -101,14 +122,22 @@ export function buildArchitectureMermaid(
   }
   if (queue && datastore) edge(queue, datastore, 'process');
 
-  // Any service beyond the first still needs to reach the datastore, and any
-  // orphan component would otherwise float unconnected in the diagram.
-  const anchor = service ?? client ?? components[0];
+  // Orphan rescue: anything the topology above did not touch would otherwise
+  // float unconnected. Direction comes from the component's KIND — drawing
+  // every orphan as `anchor -> c` inverts the arrow for callers (clients, CDNs)
+  // and is actively misleading about who calls whom.
+  const anchor = service ?? clients[0] ?? components[0];
   for (const c of components) {
     if (c === anchor) continue;
     const id = ids.get(c)!;
     const connected = [...seenEdges].some((k) => k.startsWith(`${id}->`) || k.endsWith(`->${id}`));
-    if (!connected) edge(anchor, c);
+    if (!connected) {
+      if (c.kind === 'client' || c.kind === 'cdn') {
+        edge(c, anchor); // callers point inward
+      } else {
+        edge(anchor, c); // the anchor service reaches out to everything else
+      }
+    }
   }
 
   return lines.join('\n');

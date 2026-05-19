@@ -229,4 +229,114 @@ describe('buildArchitectureMermaid', () => {
     expect(mermaid).toContain('flowchart TD');
     expect(mermaid).toContain('No components');
   });
+
+  /* --- MINOR-3 regression: arrow DIRECTION for multi-UI products ---------- */
+
+  /** Parse `A -->|label| B` / `A --> B` edge lines into [from, to] pairs. */
+  function edges(mermaid: string): Array<[string, string]> {
+    return mermaid
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.includes('-->'))
+      .map((l) => {
+        const m = /^([A-Za-z0-9_]+)\s*-->(?:\|[^|]*\|)?\s*([A-Za-z0-9_]+)$/.exec(l);
+        expect(m, `unparseable edge line: ${l}`).not.toBeNull();
+        return [m![1], m![2]] as [string, string];
+      });
+  }
+
+  it('points EVERY client at the service, never away from it', () => {
+    // The real shape that exposed the bug: three UI surfaces on one API.
+    const components = [
+      comp('Clinician Web App', 'client'),
+      comp('Patient Portal', 'client'),
+      comp('Admin Console', 'client'),
+      comp('Core API', 'service'),
+      comp('Postgres', 'datastore'),
+    ];
+    const mermaid = buildArchitectureMermaid('Multi UI', components);
+    const e = edges(mermaid);
+    const api = mermaidNodeId('Core API');
+
+    for (const name of ['Clinician Web App', 'Patient Portal', 'Admin Console']) {
+      const id = mermaidNodeId(name);
+      expect(e, `${name} should call the service`).toContainEqual([id, api]);
+      expect(
+        e.some(([from, to]) => from === api && to === id),
+        `${name} must NOT be drawn as an outbound edge from the service`,
+      ).toBe(false);
+    }
+  });
+
+  it('never draws an edge from a service into a client or a cdn', () => {
+    // Whole-shape guard: no matter which components exist, callers point inward.
+    const components = [
+      comp('CDN', 'cdn'),
+      comp('Web', 'client'),
+      comp('Mobile Web', 'client'),
+      comp('API', 'service'),
+      comp('Worker', 'service'),
+      comp('Pooler', 'service'),
+      comp('Postgres', 'datastore'),
+      comp('Blob Storage', 'datastore'),
+      comp('Redis', 'cache'),
+      comp('Queue', 'queue'),
+      comp('Stripe', 'external'),
+    ];
+    const mermaid = buildArchitectureMermaid('Everything', components);
+    const byId = new Map(components.map((c) => [mermaidNodeId(c.name), c]));
+
+    for (const [from, to] of edges(mermaid)) {
+      const target = byId.get(to)!;
+      const source = byId.get(from)!;
+      if (target.kind === 'client') {
+        expect(source.kind, `${from} -> ${to}: only a cdn may point at a client`).toBe('cdn');
+      }
+      expect(target.kind, `${from} -> ${to}: nothing may point at a cdn`).not.toBe('cdn');
+    }
+
+    // And every component is still connected (no regression on orphan rescue).
+    const touched = new Set(edges(mermaid).flat());
+    for (const c of components) {
+      expect(touched.has(mermaidNodeId(c.name)), `${c.name} should be connected`).toBe(true);
+    }
+  });
+
+  it('fronts every client with the cdn, not just the first', () => {
+    const components = [
+      comp('CDN', 'cdn'),
+      comp('Web', 'client'),
+      comp('Admin', 'client'),
+      comp('API', 'service'),
+    ];
+    const e = edges(buildArchitectureMermaid('CDN fan-out', components));
+    expect(e).toContainEqual([mermaidNodeId('CDN'), mermaidNodeId('Web')]);
+    expect(e).toContainEqual([mermaidNodeId('CDN'), mermaidNodeId('Admin')]);
+  });
+
+  it('sends clients to the datastore when there is no service at all', () => {
+    const components = [
+      comp('Web', 'client'),
+      comp('Admin', 'client'),
+      comp('Supabase', 'datastore'),
+    ];
+    const e = edges(buildArchitectureMermaid('BaaS', components));
+    expect(e).toContainEqual([mermaidNodeId('Web'), mermaidNodeId('Supabase')]);
+    expect(e).toContainEqual([mermaidNodeId('Admin'), mermaidNodeId('Supabase')]);
+  });
+
+  it('is deterministic — same input, byte-identical output', () => {
+    const components = [
+      comp('CDN', 'cdn'),
+      comp('Web', 'client'),
+      comp('Admin', 'client'),
+      comp('API', 'service'),
+      comp('Pooler', 'service'),
+      comp('Postgres', 'datastore'),
+      comp('Stripe', 'external'),
+    ];
+    const a = buildArchitectureMermaid('Same', components);
+    const b = buildArchitectureMermaid('Same', components);
+    expect(a).toBe(b);
+  });
 });
