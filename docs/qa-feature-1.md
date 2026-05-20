@@ -89,6 +89,47 @@ string", try `JSON.parse()` on that field once and re-validate. Failing that, tr
 `invalid_type` on a container field as **extend-retryable** so the existing single retry
 applies. Either way keep the hard one-retry cap — do not loop.
 
+**Status: FIXED** — `coerceStringifiedArrays()` in `shared.ts` parses the offending
+path(s) once and re-validates with zero extra calls. See MAJOR-1 tests in `shared.test.ts`.
+
+### MAJOR-2 — Live PRD generation fails schema validation on relationship `kind` enum
+
+**Routed to:** fix task (backend) · **Files:** `src/lib/prd/llm/normalize.ts`, `src/lib/prd/llm/stages/architecture.ts`, `src/lib/prd/llm/shared.ts` (runStage `repair` hook)
+
+**What happened, live.** On a real generation (`claude-haiku-4-5`, gym-booking brief),
+stages 1 and 2 both completed and were paid for (prd=6885, architecture=5250 out tokens),
+then zod rejected the architecture output:
+
+```
+invalid_output: Stage "architecture" output failed schema validation:
+dataModel.relationships[1..6].kind: Invalid option:
+expected one of "one-to-one" | "one-to-many" | "many-to-many"
+```
+
+**Root cause.** The model returned natural relationship phrasings (`belongs-to`,
+`has-many`, `references`, `1:N`, …) instead of the exact zod enum values. The mocked unit
+tests always used valid enum values, so this passed CI green but failed **~half of live
+runs** on the architecture stage — burning a paid call each time.
+
+**Fix (tighten, don't loosen).**
+1. Tightened the architecture prompt: the relationship `kind` field is called out as
+   EXACTLY the three literal enum strings, with an explicit mapping guide + examples, and
+   an explicit "do NOT emit belongs-to/has-many/1:N/m2m" instruction.
+2. Added a deterministic normalization/repair layer (`normalize.ts`) that maps common
+   model synonyms onto the strict enum BEFORE zod validation. Wired into `runStage` via a
+   generic `repair` hook applied to raw output before every `safeParse` (first attempt AND
+   the extend-retry). Unmappable values are left to fail → the existing one re-ask fires
+   rather than a silent wrong guess. Zero extra calls.
+
+**Verify.** New `src/lib/prd/llm/pipeline.live.test.ts` runs the FULL 3-stage pipeline
+end-to-end against real Anthropic (guarded on `ANTHROPIC_API_KEY`, fast model) over 3
+varied ideas (gym booking / link-in-bio / internal CRM) and asserts
+`prdDocumentSchema.safeParse(doc).success`. Confirmed passing live on the gym-booking repro
+(architecture stage no longer dies). Offline: `normalize.test.ts` + runStage `repair` tests
+cover the map and the hook.
+
+**Status: FIXED.**
+
 ---
 
 ## Minors

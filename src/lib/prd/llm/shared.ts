@@ -369,6 +369,20 @@ export interface RunStageOptions<T> {
   schema: z.ZodType<T>;
   maxTokens: number;
   signal?: AbortSignal;
+  /**
+   * Optional deterministic repair applied to the RAW model output BEFORE every
+   * `schema.safeParse` (first attempt AND the extend-retry). Use it to map
+   * common model synonyms onto strict enum values without loosening the schema
+   * — e.g. the architecture stage rewrites relationship `kind` values like
+   * "belongs-to"/"has-many" to the one-to-one|one-to-many|many-to-many enum.
+   *
+   * Contract: PURE and bounded (no network, no loop). Must return a value of
+   * the same shape (a shallow-cloned copy is expected; never mutate the input).
+   * It should leave already-valid and genuinely-unmappable values untouched so
+   * that a truly bad value still fails validation and triggers the single
+   * re-ask rather than being silently guessed. Defaults to identity.
+   */
+  repair?: (raw: unknown) => unknown;
 }
 
 /**
@@ -393,21 +407,25 @@ export interface RunStageOptions<T> {
  */
 export async function runStage<T>(opts: RunStageOptions<T>): Promise<T> {
   const jsonSchema = toInputSchema(opts.schema);
+  // Deterministic pre-validation repair (identity when the stage supplies none).
+  const repair = opts.repair ?? ((raw: unknown) => raw);
 
   // First attempt — get the raw tool_use.input without letting callStructured's
   // own zod gate collapse under-volume and structural failures together.
-  const raw1 = await callStructured<unknown>({
-    model: opts.model,
-    system: opts.system,
-    messages: opts.messages,
-    toolName: opts.toolName,
-    toolDescription: opts.toolDescription,
-    jsonSchema,
-    schema: z.unknown(),
-    maxTokens: opts.maxTokens,
-    signal: opts.signal,
-    stage: opts.stage,
-  });
+  const raw1 = repair(
+    await callStructured<unknown>({
+      model: opts.model,
+      system: opts.system,
+      messages: opts.messages,
+      toolName: opts.toolName,
+      toolDescription: opts.toolDescription,
+      jsonSchema,
+      schema: z.unknown(),
+      maxTokens: opts.maxTokens,
+      signal: opts.signal,
+      stage: opts.stage,
+    }),
+  );
 
   const parsed1 = opts.schema.safeParse(raw1);
   if (parsed1.success) return parsed1.data;
@@ -465,22 +483,24 @@ export async function runStage<T>(opts: RunStageOptions<T>): Promise<T> {
   // Second (and final) attempt — feed the previous output back and ask for the
   // full set. We include the previous JSON as an assistant turn so the model
   // extends rather than regenerates from scratch.
-  const raw2 = await callStructured<unknown>({
-    model: opts.model,
-    system: opts.system,
-    messages: [
-      ...opts.messages,
-      { role: 'assistant', content: JSON.stringify(effectiveOutput) },
-      { role: 'user', content: buildRetryInstruction(shortfalls) },
-    ],
-    toolName: opts.toolName,
-    toolDescription: opts.toolDescription,
-    jsonSchema,
-    schema: z.unknown(),
-    maxTokens: opts.maxTokens,
-    signal: opts.signal,
-    stage: opts.stage,
-  });
+  const raw2 = repair(
+      await callStructured<unknown>({
+        model: opts.model,
+        messages: [
+          ...opts.messages,
+          { role: 'assistant', content: JSON.stringify(effectiveOutput) },
+          { role: 'user', content: buildRetryInstruction(shortfalls) },
+        ],
+        system: opts.system,
+        toolName: opts.toolName,
+        toolDescription: opts.toolDescription,
+        jsonSchema,
+        schema: z.unknown(),
+        maxTokens: opts.maxTokens,
+        signal: opts.signal,
+        stage: opts.stage,
+      }),
+    );
 
   const parsed2 = opts.schema.safeParse(raw2);
   if (parsed2.success) return parsed2.data;

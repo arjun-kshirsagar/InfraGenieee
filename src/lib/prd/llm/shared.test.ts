@@ -260,4 +260,38 @@ describe('runStage', () => {
     await expect(runStage(baseStageOpts)).rejects.toMatchObject({ code: 'invalid_output' });
     expect(callStructured).toHaveBeenCalledOnce();
   });
+
+  /* t_ad18b485: the deterministic `repair` hook runs BEFORE validation. */
+
+  it('applies the repair hook before validation, recovering an enum synonym in ONE call', async () => {
+    // Schema demands the strict enum; the model returns a synonym the repair maps.
+    const enumSchema = z.object({ kind: z.enum(['one-to-many', 'many-to-many']) });
+    callStructured.mockResolvedValueOnce({ kind: 'has-many' });
+
+    const out = await runStage({
+      ...baseStageOpts,
+      schema: enumSchema,
+      repair: (raw) => {
+        const r = raw as { kind?: unknown };
+        return r?.kind === 'has-many' ? { ...r, kind: 'one-to-many' } : raw;
+      },
+    });
+
+    expect(out).toEqual({ kind: 'one-to-many' });
+    // Repair is NOT a retry: exactly one upstream call.
+    expect(callStructured).toHaveBeenCalledOnce();
+  });
+
+  it('still throws when the repair cannot map the value (no silent guess)', async () => {
+    const enumSchema = z.object({ kind: z.enum(['one-to-many', 'many-to-many']) });
+    callStructured.mockResolvedValueOnce({ kind: 'associated-with' });
+    await expect(
+      runStage({
+        ...baseStageOpts,
+        schema: enumSchema,
+        repair: (raw) => raw, // identity — nothing to map
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_output' });
+    expect(callStructured).toHaveBeenCalledOnce();
+  });
 });
