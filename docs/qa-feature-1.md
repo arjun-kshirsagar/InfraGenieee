@@ -130,9 +130,43 @@ cover the map and the hook.
 
 **Status: FIXED.**
 
----
+### MAJOR-3 — Plan stage truncates at max_tokens (16000) on large plans, burning the paid prd + architecture
 
-## Minors
+**Routed to:** fix task (backend, `t_10066d39`) · **Files:** `src/lib/prd/llm/stages/plan.ts:39`
+
+**What happened, live.** The guarded 3-stage live smoke (`pipeline.live.test.ts`), added
+for MAJOR-2, exercises the "link-in-bio" brief end to end. On that idea the prd and
+architecture stages both completed and were **paid for** (prd=8441, architecture=12219 out
+tokens), then the plan stage died:
+
+```
+GenerationError: Output truncated at max_tokens (16000); the structured JSON is incomplete.
+  at extractAndValidate src/lib/prd/llm/client.ts:244
+```
+
+Observed **twice** for this idea — the plan stage emitted exactly 16000 output tokens and
+truncated mid-JSON. `client.ts` maps `stop_reason: 'max_tokens'` to `invalid_output`, which
+is terminal (no retry), so the two already-paid upstream stages are discarded — the same
+waste pattern as MAJOR-1/MAJOR-2.
+
+**Root cause.** `PLAN_MAX_TOKENS = 16000` is not enough headroom for a rich plan. Plan is
+the largest stage: many milestones × well over a dozen tasks, each with title +
+description + acceptanceCriteria + dependsOn. The link-in-bio plan simply needs more than
+16000 output tokens and gets cut off before the tool_use JSON closes.
+
+**Fix.** Raised `PLAN_MAX_TOKENS` to **32000** — ~2× the observed truncation point.
+Verified safe against the **official Anthropic model docs** (fetched 2026-07-26,
+`platform.claude.com/docs/en/about-claude/models/overview`): `claude-haiku-4-5` max output
+is **64k tokens**; Sonnet 5 / Opus 4.8 are 128k. So 32000 leaves large headroom on the fast
+model we run in the smoke and is a non-issue on the larger models. The source is cited in a
+code comment on the constant. Kept the one-retry cap untouched — no loop was introduced.
+
+**Verify.** The link-in-bio idea in `pipeline.live.test.ts` now passes the full pipeline
+(previously it failed *only* on this plan truncation; gym-booking already passed fully).
+`npm run build` + `npm run lint` + `npm test` all green offline; live smoke confirmed
+against real Anthropic.
+
+**Status: FIXED.**
 
 ### MINOR-1 — Stale "questionnaire" copy in two user-facing places
 

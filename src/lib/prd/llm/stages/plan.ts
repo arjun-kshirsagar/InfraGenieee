@@ -33,10 +33,21 @@ import {
 import type { StageContext } from '@/lib/prd/generation';
 import { formatBrief, runStage } from '@/lib/prd/llm/shared';
 
-/** Plan can be the largest stage: an enterprise plan has many milestones and
- *  well over a dozen tasks, each with description + acceptance criteria. Keep
- *  generous headroom so a rich plan doesn't truncate into invalid_output. */
-const PLAN_MAX_TOKENS = 16000;
+/**
+ * Plan is the LARGEST stage: a rich plan has many milestones and well over a
+ * dozen tasks, each with title + description + acceptanceCriteria + dependsOn.
+ * The old 16000 cap was not enough headroom — a real "link-in-bio" generation
+ * truncated mid-JSON at exactly 16000 output tokens (stop_reason=max_tokens),
+ * throwing invalid_output and discarding the already-paid prd + architecture
+ * stages (see docs/qa-feature-1.md, MAJOR-3).
+ *
+ * 32000 gives ~2x the observed truncation point. This is safely within every
+ * model we run: verified against the official Anthropic model docs (fetched
+ * 2026-07-26, platform.claude.com/docs/en/about-claude/models/overview) —
+ * claude-haiku-4-5 max output is 64k tokens; Sonnet 5 / Opus 4.8 are 128k. So
+ * 32000 leaves large headroom on Haiku and is a non-issue on Sonnet/Opus.
+ */
+const PLAN_MAX_TOKENS = 32000;
 
 /**
  * The plan stage's target: milestones (≥3) whose FLATTENED tasks number ≥12.
