@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Feature 2 — fetched vendor price books (regenerable, not source of truth)
+/.cache/

@@ -516,6 +516,11 @@ export const apiErrorSchema = z.object({
       /** Server is missing ANTHROPIC_API_KEY — a deployment fault, not a user
        *  error. Never echo any part of the key or env in the message. */
       'llm_not_configured',
+      /** Feature 2: no price book could be produced for ANY provider (e.g.
+       *  TAVILY_API_KEY missing, or every vendor page failed). Partial failures
+       *  do NOT use this — they return 200 with `gaps[]` so four working
+       *  providers are still comparable. Retryable. */
+      'pricing_unavailable',
     ]),
     message: z.string(),
     issues: z.array(z.object({ path: z.string(), message: z.string() })).optional(),

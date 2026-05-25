@@ -35,6 +35,7 @@ Conventions:
 | `internal_error` | 500 | Unexpected |
 | `llm_unavailable` | 503 | Upstream 429/5xx/timeout — **retryable**, offer a retry |
 | `llm_not_configured` | 500 | Server has no `ANTHROPIC_API_KEY` — deployment fault |
+| `pricing_unavailable` | 503 | **Feature 2** — no price book at all (no `TAVILY_API_KEY`, or every source failed). **Retryable.** A PARTIAL failure is not this: it returns 200 with `gaps[]`. |
 
 ---
 
@@ -209,3 +210,294 @@ a valid empty draft.
 
 When server persistence arrives it lands as `GET /api/prd/:id` returning the
 same `{ document }` envelope. Nothing else changes.
+
+---
+
+## Feature 2 — Deployment cost predictor
+
+Design rationale lives in `docs/feature-2-cost-predictor.md`. Read that first.
+Schemas live in `src/types/cost.ts`.
+
+Four routes. Two are static-ish reads that feed the client's **pure** cost
+engine; two are POSTs. The interactive UI calls `catalog` + `prices` **once** on
+load and then recomputes locally on every toggle — it does NOT call
+`/api/cost/estimate` per keystroke.
+
+### `GET /api/cost/catalog`
+
+The provider/service/SKU structure that populates the selectors. **Contains no
+prices** — see the design doc for why that separation is load-bearing.
+
+**Response** — `catalogResponseSchema`
+
+```json
+{
+  "catalog": {
+    "version": "1.0.0",
+    "services": [
+      {
+        "id": "aws:rds-postgres",
+        "provider": "aws",
+        "role": "db-relational",
+        "name": "Amazon RDS for PostgreSQL",
+        "kind": "managed",
+        "description": "Managed PostgreSQL with automated backups…",
+        "pricingUrl": "https://aws.amazon.com/rds/postgresql/pricing/",
+        "scalingScore": 5,
+        "simplicityScore": 3,
+        "tradeoff": "More knobs than a hobby project needs; you pay around the clock.",
+        "freeTierNote": "750 hours of db.t4g.micro for 12 months on a new account.",
+        "skus": [
+          {
+            "id": "aws:rds-postgres:small",
+            "displayName": "db.t4g.small",
+            "tier": "small",
+            "specs": { "vcpu": 2, "memoryGb": 2, "summary": "2 vCPU · 2 GB · Single-AZ" },
+            "defaultUnits": 1,
+            "dimensions": [
+              {
+                "id": "instance-hour",
+                "label": "Instance hour",
+                "quantityKey": "dbInstanceHours",
+                "unit": "USD / hour",
+                "required": true,
+                "extractionHint": "Single-AZ db.t4g.small On-Demand price in US East (N. Virginia)"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Cacheable and deterministic — no upstream calls, so it cannot 503.
+
+| Status | Body | When |
+|---|---|---|
+| `200` | `{ catalog: ServiceCatalog }` | always |
+| `500` | `internal_error` | the checked-in catalog fails its own schema (a bug) |
+
+### `GET /api/cost/prices`
+
+The price books the client needs to do the arithmetic locally.
+
+**Query** — `?providers=aws,gcp` (optional; omit for all five).
+
+**Response** — `pricesResponseSchema`
+
+```json
+{
+  "books": [
+    {
+      "provider": "aws",
+      "region": "us-east-1",
+      "pipelineVersion": "1.0.0",
+      "generatedAt": "2026-07-26T10:12:30.000Z",
+      "records": [
+        {
+          "skuId": "aws:rds-postgres:small",
+          "dimensionId": "instance-hour",
+          "unitPriceUsd": 0.032,
+          "includedQuantity": 0,
+          "currency": "USD",
+          "source": {
+            "url": "https://aws.amazon.com/rds/postgresql/pricing/",
+            "fetchedAt": "2026-07-26T10:12:04.000Z",
+            "evidence": "| db.t4g.small | 2 | 2 GiB | $0.032 |",
+            "extractorModel": "claude-haiku-4-5-20251001"
+          }
+        }
+      ],
+      "gaps": [
+        { "skuId": "aws:msk:small", "dimensionId": "broker-hour", "reason": "not_found_on_page" }
+      ]
+    }
+  ]
+}
+```
+
+**Guarantees the backend must uphold**
+
+1. **Every price is cited.** `source.url`, `source.fetchedAt` and
+   `source.evidence` are non-optional in `priceRecordSchema`, and `evidence` has
+   passed `assertEvidenceSupportsPrice` — a verbatim substring of the fetched
+   page that literally contains the number. A record that fails is **discarded**,
+   never repaired.
+2. **A partial book is a 200.** Four priced providers plus one gap is more useful
+   than an error page. `pricing_unavailable` (503) is only for the total failure.
+3. **Gaps are reported, not hidden.** Anything unpriced appears in `gaps[]` so the
+   UI can render "unpriced" rather than `$0.00`.
+4. Books are per provider, so one failing vendor cannot invalidate the others.
+5. Served from `.cache/pricing/<provider>.json` when fresh
+   (`PRICE_MAX_AGE_DAYS = 7`) and written by the current
+   `PRICING_PIPELINE_VERSION`. A cold cache means a slow first call — the
+   frontend must show a loading state, not a spinner-less blank.
+6. No API key, and no raw upstream body, appears anywhere in the response.
+
+| Status | Body | When |
+|---|---|---|
+| `200` | `{ books: PriceBook[] }` | success, possibly with gaps |
+| `400` | `validation_error` | unknown provider in `?providers=` |
+| `503` | `pricing_unavailable` | **no** book could be produced — retryable |
+| `500` | `internal_error` | unexpected |
+
+### `POST /api/cost/recommend`
+
+Turns PRD context into a seeded, editable starting point. One Anthropic call;
+expect **5–15s**.
+
+PRDs live in `localStorage` (Feature 1 has no server persistence), so the client
+POSTs the context slice rather than an id.
+
+**Request** — `recommendRequestSchema`
+
+```json
+{
+  "costContext": {
+    "title": "Bakery surplus marketplace",
+    "context": { "userScale": "medium", "trafficPattern": "business-hours", "budgetBand": "startup", "timelineWeeks": 12 },
+    "components": [
+      { "name": "Web app", "kind": "client", "responsibility": "Customer UI", "technology": "Next.js" },
+      { "name": "API", "kind": "service", "responsibility": "Business logic", "technology": "Node.js" },
+      { "name": "Primary DB", "kind": "datastore", "responsibility": "Orders", "technology": "PostgreSQL" }
+    ],
+    "infrastructure": { "hosting": "Vercel", "database": "Postgres", "cache": null, "storage": "S3", "cicd": "GitHub Actions", "environments": ["preview", "production"], "rationale": ["…"] },
+    "summary": "Marketplace for same-day surplus bread."
+  }
+}
+```
+
+**Response** — `recommendResponseSchema`
+
+```json
+{
+  "recommendation": {
+    "recommendedProvider": "digitalocean",
+    "rationale": "At 1k–50k MAU on a startup budget with business-hours traffic…",
+    "usageProfile": { "monthlyActiveUsers": 10000, "monthlyRequests": 5000000, "…": 0 },
+    "assumptions": ["No cache component was specified, so no cache is priced."],
+    "selections": [
+      { "provider": "digitalocean", "choices": [
+        { "role": "compute-web", "serviceId": "digitalocean:app-platform", "skuId": "digitalocean:app-platform:basic-1gb", "units": 1, "enabled": true }
+      ] }
+    ],
+    "tradeoffs": [
+      { "provider": "digitalocean", "pros": ["Flat pricing fits a startup budget"], "cons": ["No managed Kafka"] }
+    ]
+  }
+}
+```
+
+**Guarantees**
+
+1. **`usageProfile` is derived in TypeScript**, then optionally nudged by the
+   model — never invented by it. Same split as Feature 1's Mermaid/graph maths:
+   the model reasons, TypeScript does arithmetic.
+2. **Every returned `serviceId`/`skuId` is verified against the catalog** and must
+   fill the role it claims. An invented id is dropped and the role falls back to
+   the catalog default — the same "don't trust, verify" posture as the evidence
+   gate.
+3. It is a **seed, not a verdict** — the UI lets the user change everything.
+4. `assumptions` (≥1) states whatever was decided on the user's behalf.
+5. **Not deterministic.** Do not assert byte-equality across runs.
+
+| Status | Body | When |
+|---|---|---|
+| `200` | `{ recommendation: CostRecommendation }` | success |
+| `400` | `validation_error` / `bad_request` | bad body |
+| `500` | `generation_failed` | model output failed validation after one retry |
+| `503` | `llm_unavailable` | upstream 429/5xx/timeout — retryable |
+| `500` | `llm_not_configured` | no `ANTHROPIC_API_KEY` |
+
+### `POST /api/cost/estimate`
+
+Server-side evaluation of the same pure engine the client runs. Exists for tests,
+shareable links, and as the authority if the two ever disagree. No LLM call, no
+upstream fetch beyond the (cached) price books.
+
+**Request** — `estimateRequestSchema`
+
+```json
+{
+  "usage": { "monthlyActiveUsers": 10000, "…": 0 },
+  "selections": [{ "provider": "aws", "choices": [{ "role": "db-relational", "serviceId": "aws:rds-postgres", "skuId": "aws:rds-postgres:small" }] }],
+  "requiredRoles": ["compute-web", "db-relational", "cdn"]
+}
+```
+
+**Response** — `estimateResponseSchema`
+
+```json
+{
+  "comparison": {
+    "generatedAt": "2026-07-26T10:20:00.000Z",
+    "estimates": [
+      {
+        "provider": "aws",
+        "region": "us-east-1",
+        "items": [
+          {
+            "role": "db-relational",
+            "serviceId": "aws:rds-postgres",
+            "serviceName": "Amazon RDS for PostgreSQL",
+            "skuId": "aws:rds-postgres:small",
+            "skuName": "db.t4g.small",
+            "units": 1,
+            "monthlyUsd": 23.36,
+            "incomplete": false,
+            "dimensions": [
+              {
+                "dimensionId": "instance-hour",
+                "label": "Instance hour",
+                "unit": "USD / hour",
+                "quantityKey": "dbInstanceHours",
+                "quantity": 730,
+                "includedQuantity": 0,
+                "billableQuantity": 730,
+                "unitPriceUsd": 0.032,
+                "monthlyUsd": 23.36,
+                "unpriced": false,
+                "source": { "url": "…", "fetchedAt": "…", "evidence": "…", "extractorModel": "…" }
+              }
+            ]
+          }
+        ],
+        "monthlyUsd": 23.36,
+        "unsupportedRoles": [],
+        "incomplete": false,
+        "oldestPriceAt": "2026-07-26T10:12:04.000Z",
+        "warnings": []
+      }
+    ],
+    "cheapest": "aws",
+    "bestScaling": "aws",
+    "simplest": "aws"
+  }
+}
+```
+
+**Guarantees**
+
+1. **Deterministic and pure** — same inputs always give the same output, given
+   the same price books. Safe to assert byte-equality on in tests (unlike
+   Feature 1).
+2. `billableQuantity = max(0, quantity - includedQuantity)`;
+   `monthlyUsd = billableQuantity × unitPriceUsd`. Nothing else.
+3. **`unpriced: true` never means free.** `monthlyUsd` is `0` because we have no
+   number, and the UI must say so. A `required` unpriced dimension sets
+   `incomplete` on the line and on the provider estimate.
+4. **`cheapest` only considers complete estimates**, and never a provider with
+   `unsupportedRoles`. A provider is not cheaper for being unable to run the app.
+5. Badges are `nullable` — with one provider, or all estimates incomplete, there
+   is no honest winner and the UI shows none.
+6. `choice.units` multiplies per-unit quantities but **not** `months`/`seats`:
+   you do not pay a plan fee twice for running two functions.
+
+| Status | Body | When |
+|---|---|---|
+| `200` | `{ comparison: CostComparison }` | success |
+| `400` | `validation_error` / `bad_request` | bad body, unknown SKU id, or role/provider mismatch |
+| `503` | `pricing_unavailable` | no price book at all — retryable |
+| `500` | `internal_error` | unexpected |

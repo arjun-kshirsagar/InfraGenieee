@@ -43,6 +43,11 @@ export const ERROR_STATUS: Record<ApiError['error']['code'], number> = {
   llm_unavailable: 503,
   // 500: a server misconfiguration (no API key), never the user's fault.
   llm_not_configured: 500,
+  // 503: Feature 2 — not a single price book could be produced (no
+  // TAVILY_API_KEY, or every vendor source failed). Retryable, so 503 rather
+  // than 500. A PARTIAL pricing failure never reaches here: it returns 200 with
+  // `gaps[]` so the providers that did price stay comparable.
+  pricing_unavailable: 503,
 };
 
 /**

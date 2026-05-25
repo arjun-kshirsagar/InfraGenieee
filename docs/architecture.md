@@ -11,8 +11,8 @@ them plan it and ship it:
 
 | # | Feature | Status |
 |---|---------|--------|
-| 1 | PRD & Plan generator (**idea → AI-reasoned** PRD + architecture + task breakdown) | in progress (re-scoped to AI generation) |
-| 2 | Deployment cost predictor (multi-vendor comparison, PRD-aware) | not started |
+| 1 | PRD & Plan generator (**idea → AI-reasoned** PRD + architecture + task breakdown) | done (verified) |
+| 2 | Deployment cost predictor (multi-vendor comparison, PRD-aware) | in progress — see `docs/feature-2-cost-predictor.md` |
 | 3 | One-click deploy (customer's app → Vercel first) | not started |
 
 ## 2. Stack
@@ -33,13 +33,19 @@ src/
     api/                     # route handlers only — no business logic
       prd/clarify/route.ts   # POST → adaptive questions (0–3)
       prd/generate/route.ts  # POST → PrdDocument
+      cost/catalog/route.ts  # GET  → ServiceCatalog (structure, no prices)
+      cost/prices/route.ts   # GET  → PriceBook[] (fetched + cited)
+      cost/recommend/route.ts# POST → CostRecommendation
+      cost/estimate/route.ts # POST → CostComparison (server-side mirror)
     prd/
       new/page.tsx           # idea + context input flow
       [id]/page.tsx          # generated PRD view (reads client store)
+    cost/page.tsx            # ⭐ Feature 2 — the interactive cost explorer
     layout.tsx  page.tsx  globals.css
   components/
     ui/                      # shadcn primitives — generated, don't hand-edit
     prd/                     # Feature 1 components
+    cost/                    # Feature 2 components
   lib/
     prd/
       generation.ts          # ⭐ the LLM seam: interfaces + GenerationError
@@ -47,13 +53,20 @@ src/
       llm/                   # Anthropic client + prompts + stages (backend-owned)
       markdown.ts            # document → markdown
       store.ts               # client-side draft/document persistence
+    cost/
+      pricing-seam.ts        # ⭐ Feature 2 seam: interfaces + PricingError
+      catalog/               # ⭐ pure data: services/SKUs/dimensions, NO PRICES
+      pricing/               # server-only: fetch + extract + evidence gate + cache
+      estimate/              # ⭐ pure: quantities, totals, comparison, badges
     utils.ts
   types/
     prd.ts                   # ⭐ Feature 1 contract: zod schemas + inferred types
+    cost.ts                  # ⭐ Feature 2 contract: zod schemas + inferred types
 docs/
   architecture.md            # this file
   api-contracts.md           # HTTP contracts
   feature-1-ai-prd.md        # ⭐ Feature 1 design (read this first)
+  feature-2-cost-predictor.md# ⭐ Feature 2 design (read this first)
 ```
 
 **Rules**
@@ -62,13 +75,18 @@ docs/
    that duplicates a zod schema — use `z.infer`.
 2. Route handlers validate input with the request schema and return the
    response schema shape. No business logic in `route.ts`.
-3. `src/lib/prd/derive/` must stay **pure**: same input → same output, no clock,
-   no randomness, no I/O. It holds the mechanical work (Mermaid, graph maths)
-   we deliberately do NOT trust the model with.
-4. UI components never import from `src/lib/prd/llm/` or `generation.ts` — they
-   consume the API. The API key must never be reachable from a client bundle.
+3. `src/lib/prd/derive/` and `src/lib/cost/estimate/` must stay **pure**: same
+   input → same output, no clock, no randomness, no I/O. They hold the
+   mechanical work we deliberately do NOT trust the model with. The cost engine
+   being pure is also what lets it run in the browser for live totals.
+4. UI components never import from `src/lib/prd/llm/`, `generation.ts`,
+   `src/lib/cost/pricing/` or `pricing-seam.ts` — they consume the API. No API
+   key may be reachable from a client bundle.
 5. Anything user-visible that the AI decided rather than the user must appear in
-   `prd.assumptions`.
+   `prd.assumptions` (Feature 1) or `recommendation.assumptions` (Feature 2).
+6. **The cost catalog contains no prices.** Numbers reach the engine only as a
+   `PriceRecord`, which cannot parse without a `source` carrying `evidence`.
+   That is what makes "every price is cited" a type-level guarantee.
 
 ## 4. Feature 1 — AI-generated PRD & Plan
 
@@ -123,6 +141,14 @@ add server persistence, and the route contracts don't change when we do.
 | LLM output | forced tool use (`tool_choice`) | guaranteed schema-shaped JSON; we never parse prose |
 | Quality floors | zod `.min()`, not prose | prose floors shipped broken in 18/24 combos |
 | Secrets | server-side env only, never in `NEXT_PUBLIC_*` | Feature 3 will hold provider tokens |
+| **Provider comparison key** | `InfraRole`, not vendor product names | RDS vs Cloud SQL is comparable; "AWS vs GCP" is not |
+| **Price provenance** | every `PriceRecord` carries `source.evidence` | an uncited price is indistinguishable from a fabricated one |
+| **Fabrication defence** | pure-TS substring gate, not a better prompt | a model can't invent a number that survives a substring check against the real page |
+| **Pricing source** | provider's structured public feed where one exists, Tavily otherwise | measured: Azure HTML renders `$-`, AWS EC2/SQS render client-side — Tavily alone cannot price them |
+| **Unpriced dimensions** | rendered as "unpriced", never `$0` | a failed fetch must not make a provider look cheap |
+| **Cost engine location** | pure module, runs in the browser | live totals on every toggle without a round-trip |
+| **Priced region** | exactly one per provider, surfaced in the UI | multi-region multiplies the fetch surface ~20× for a day-one comparison nobody asked for |
+| **Price cache** | `.cache/pricing/<provider>.json`, 7-day TTL | prices move monthly; a file survives hot reloads where a Map doesn't |
 
 ## 6. Cost safety
 
