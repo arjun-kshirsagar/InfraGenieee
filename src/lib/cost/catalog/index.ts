@@ -9,22 +9,32 @@
  * STRUCTURE ONLY — NO PRICES. Numbers arrive exclusively as fetched, cited
  * `PriceRecord`s through the pricing layer's evidence gate.
  *
- * Extensibility: B3 adds Azure, Vercel and DigitalOcean. To add a provider,
- * write `src/lib/cost/catalog/<provider>.ts` exporting a `CatalogServiceInput[]`
- * and append it to `PROVIDER_SERVICES` below — nothing else changes.
+ * Extensibility: to add a provider, write `src/lib/cost/catalog/<provider>.ts`
+ * exporting a `CatalogServiceInput[]` and append it to `PROVIDER_SERVICES`
+ * below — nothing else changes. (B3 added Azure, Vercel and DigitalOcean this
+ * way, completing the five-provider §9 coverage grid.)
  */
 
 import { serviceCatalogSchema, CATALOG_VERSION, type ServiceCatalog } from '@/types/cost';
 
 import { awsServices } from './aws';
 import { gcpServices } from './gcp';
+import { azureServices } from './azure';
+import { vercelServices } from './vercel';
+import { digitalOceanServices } from './digitalocean';
 
 /**
- * Every provider slice, in display order. B3 appends `azureServices`,
- * `vercelServices`, `digitalOceanServices` here — the assembly and validation
- * below need no other change.
+ * Every provider slice, in display order. Appending a new provider's
+ * `CatalogServiceInput[]` here is the only change needed to add it — the
+ * assembly and validation below are provider-agnostic.
  */
-const PROVIDER_SERVICES = [...gcpServices, ...awsServices];
+const PROVIDER_SERVICES = [
+  ...awsServices,
+  ...gcpServices,
+  ...azureServices,
+  ...vercelServices,
+  ...digitalOceanServices,
+];
 
 /**
  * The assembled, validated catalog. `serviceCatalogSchema.parse` fills the
@@ -41,3 +51,6 @@ export const catalogServices = serviceCatalog.services;
 
 export { awsServices } from './aws';
 export { gcpServices } from './gcp';
+export { azureServices } from './azure';
+export { vercelServices } from './vercel';
+export { digitalOceanServices } from './digitalocean';
