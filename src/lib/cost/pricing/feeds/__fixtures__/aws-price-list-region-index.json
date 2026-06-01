@@ -1,0 +1,9 @@
+{
+  "formatVersion": "v1.0",
+  "regions": {
+    "us-east-1": {
+      "regionCode": "us-east-1",
+      "currentVersionUrl": "/offers/v1.0/aws/AWSQueueService/20250828200713/us-east-1/index.json"
+    }
+  }
+}

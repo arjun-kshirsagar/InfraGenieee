@@ -1,0 +1,59 @@
+{
+  "BillingCurrency": "USD",
+  "Items": [
+    {
+      "currencyCode": "USD",
+      "tierMinimumUnits": 0.0,
+      "retailPrice": 8.0,
+      "unitPrice": 8.0,
+      "armRegionName": "eastus",
+      "location": "US East",
+      "effectiveStartDate": "2023-03-01T00:00:00Z",
+      "meterId": "0074a6ee-1ee8-5584-bb6f-da8850089277",
+      "meterName": "vCore",
+      "productId": "DZH318Z0KDVH",
+      "skuId": "DZH318Z0KDVH/0060",
+      "productName": "Azure Database for PostgreSQL Flexible Server Memory Optimized Eadsv5 Series Compute",
+      "skuName": "64 vCore",
+      "serviceName": "Azure Database for PostgreSQL",
+      "serviceId": "DZH3199QPQTD",
+      "serviceFamily": "Databases",
+      "unitOfMeasure": "1 Hour",
+      "type": "Consumption",
+      "isPrimaryMeterRegion": true,
+      "armSkuName": "Azure_Database_for_PostgreSQL_Flexible_Server_Memory_Purpose_Eadsv5_Series_Compute_64_vCore",
+      "savingsPlan": [
+        {
+          "unitPrice": 6.4,
+          "retailPrice": 6.4,
+          "term": "1 Year"
+        }
+      ]
+    },
+    {
+      "currencyCode": "USD",
+      "tierMinimumUnits": 0.0,
+      "retailPrice": 0.085,
+      "unitPrice": 0.085,
+      "armRegionName": "eastus",
+      "location": "US East",
+      "effectiveStartDate": "2024-09-01T00:00:00Z",
+      "effectiveEndDate": "2026-07-31T23:59:00Z",
+      "meterId": "0011f5c1-c6ee-50c2-9990-2d73251cf1c2",
+      "meterName": "Ultra Disk IOPS Provisioned IOPS",
+      "productId": "DZH318Z0DCRX",
+      "skuId": "DZH318Z0DCRX/00R2",
+      "productName": "Az DB for PostgreSQL Flexible Server Storage",
+      "skuName": "Ultra Disk IOPS",
+      "serviceName": "Azure Database for PostgreSQL",
+      "serviceId": "DZH3199QPQTD",
+      "serviceFamily": "Databases",
+      "unitOfMeasure": "1/Month",
+      "type": "Consumption",
+      "isPrimaryMeterRegion": true,
+      "armSkuName": "Ultra Disk IOPS"
+    }
+  ],
+  "NextPageLink": "https://prices.azure.com/api/retail/prices?PAGE=2",
+  "Count": 2
+}

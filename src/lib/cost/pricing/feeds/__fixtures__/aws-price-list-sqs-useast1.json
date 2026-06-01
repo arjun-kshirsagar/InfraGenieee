@@ -1,0 +1,111 @@
+{
+  "formatVersion": "v1.0",
+  "disclaimer": "This pricing list is for informational purposes only. All prices are subject to ...",
+  "offerCode": "AWSQueueService",
+  "version": "20250828200713",
+  "publicationDate": "2025-08-28T20:07:13Z",
+  "products": {
+    "624ZQ7K46KHFAD9Y": {
+      "sku": "624ZQ7K46KHFAD9Y",
+      "productFamily": "API Request",
+      "attributes": {
+        "servicecode": "AWSQueueService",
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "group": "SQS-APIRequest-Tier1",
+        "groupDescription": "Amazon SQS Requests",
+        "usagetype": "Requests-FIFO-RBP",
+        "operation": "",
+        "messageDeliveryFrequency": "Exactly Once",
+        "messageDeliveryOrder": "Guaranteed",
+        "queueType": "FIFO (first-in, first-out)",
+        "regionCode": "us-east-1",
+        "servicename": "Amazon Simple Queue Service"
+      }
+    },
+    "VUY9G3EK3YXBUD92": {
+      "sku": "VUY9G3EK3YXBUD92",
+      "productFamily": "API Request",
+      "attributes": {
+        "servicecode": "AWSQueueService",
+        "location": "US East (N. Virginia)",
+        "locationType": "AWS Region",
+        "group": "SQS-APIRequest-Tier1",
+        "groupDescription": "Amazon SQS Requests",
+        "usagetype": "Requests-Fair-RBP",
+        "operation": "",
+        "queueType": "Fair",
+        "regionCode": "us-east-1",
+        "servicename": "Amazon Simple Queue Service"
+      }
+    }
+  },
+  "terms": {
+    "OnDemand": {
+      "624ZQ7K46KHFAD9Y": {
+        "624ZQ7K46KHFAD9Y.JRTCKXETXF": {
+          "offerTermCode": "JRTCKXETXF",
+          "sku": "624ZQ7K46KHFAD9Y",
+          "effectiveDate": "2025-08-01T00:00:00Z",
+          "priceDimensions": {
+            "624ZQ7K46KHFAD9Y.JRTCKXETXF.VXGXCWQKTY": {
+              "rateCode": "624ZQ7K46KHFAD9Y.JRTCKXETXF.VXGXCWQKTY",
+              "description": "$0.50 per million Amazon SQS FIFO requests in Tier1 in US East (N Virginia)",
+              "beginRange": "0",
+              "endRange": "100000000000",
+              "unit": "Requests",
+              "pricePerUnit": {
+                "USD": "0.0000005000"
+              },
+              "appliesTo": []
+            },
+            "624ZQ7K46KHFAD9Y.JRTCKXETXF.9JVYQWEJJY": {
+              "rateCode": "624ZQ7K46KHFAD9Y.JRTCKXETXF.9JVYQWEJJY",
+              "description": "$0.40 per million Amazon SQS FIFO requests in Tier2 in US East (N Virginia)",
+              "beginRange": "100000000000",
+              "endRange": "200000000000",
+              "unit": "Requests",
+              "pricePerUnit": {
+                "USD": "0.0000004000"
+              },
+              "appliesTo": []
+            },
+            "624ZQ7K46KHFAD9Y.JRTCKXETXF.27HCEGFCXT": {
+              "rateCode": "624ZQ7K46KHFAD9Y.JRTCKXETXF.27HCEGFCXT",
+              "description": "$0.35 per million Amazon SQS FIFO requests in Tier3 in US East (N Virginia)",
+              "beginRange": "200000000000",
+              "endRange": "Inf",
+              "unit": "Requests",
+              "pricePerUnit": {
+                "USD": "0.0000003500"
+              },
+              "appliesTo": []
+            }
+          },
+          "termAttributes": {}
+        }
+      },
+      "VUY9G3EK3YXBUD92": {
+        "VUY9G3EK3YXBUD92.JRTCKXETXF": {
+          "offerTermCode": "JRTCKXETXF",
+          "sku": "VUY9G3EK3YXBUD92",
+          "effectiveDate": "2025-08-01T00:00:00Z",
+          "priceDimensions": {
+            "VUY9G3EK3YXBUD92.JRTCKXETXF.6YS6EN2CT7": {
+              "rateCode": "VUY9G3EK3YXBUD92.JRTCKXETXF.6YS6EN2CT7",
+              "description": "$0.10 per million Amazon SQS fair queue requests in US East (N. Virginia)",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "unit": "Requests",
+              "pricePerUnit": {
+                "USD": "0.0000001000"
+              },
+              "appliesTo": []
+            }
+          },
+          "termAttributes": {}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "BillingCurrency": "USD",
+  "Items": [
+    {
+      "currencyCode": "USD",
+      "tierMinimumUnits": 0.0,
+      "retailPrice": 4.0,
+      "unitPrice": 4.0,
+      "armRegionName": "eastus",
+      "location": "US East",
+      "effectiveStartDate": "2023-03-01T00:00:00Z",
+      "meterId": "00a85d87-f748-5d77-add0-bbf124b19d0c",
+      "meterName": "vCore",
+      "productId": "DZH318Z0KDVH",
+      "skuId": "DZH318Z0KDVH/005R",
+      "productName": "Azure Database for PostgreSQL Flexible Server Memory Optimized Eadsv5 Series Compute",
+      "skuName": "32 vCore",
+      "serviceName": "Azure Database for PostgreSQL",
+      "serviceId": "DZH3199QPQTD",
+      "serviceFamily": "Databases",
+      "unitOfMeasure": "1 Hour",
+      "type": "Consumption",
+      "isPrimaryMeterRegion": true,
+      "armSkuName": "Azure_Database_for_PostgreSQL_Flexible_Server_Memory_Purpose_Eadsv5_Series_Compute_32_vCore",
+      "savingsPlan": [
+        {
+          "unitPrice": 3.2,
+          "retailPrice": 3.2,
+          "term": "1 Year"
+        }
+      ]
+    }
+  ],
+  "NextPageLink": null,
+  "Count": 1
+}
