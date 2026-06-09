@@ -12,7 +12,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, FileWarning } from 'lucide-react';
+import { ArrowLeft, FileWarning, Wallet } from 'lucide-react';
 import type { PrdDocument } from '@/types/prd';
 import { loadDocument } from '@/lib/prd/store';
 import { buttonVariants } from '@/components/ui/button';
@@ -107,7 +107,16 @@ export function DocumentView({ id }: { id: string }) {
               <span>Generator v{doc.generatorVersion}</span>
             </div>
           </div>
-          <ExportControls doc={doc} />
+          <div className="flex flex-col items-stretch gap-2 sm:items-end">
+            <ExportControls doc={doc} />
+            <Link
+              href={`/cost?prd=${encodeURIComponent(doc.id)}`}
+              className={buttonVariants({ variant: 'default', size: 'sm' })}
+            >
+              <Wallet className="size-4" />
+              Predict deployment cost
+            </Link>
+          </div>
         </div>
       </header>
 
