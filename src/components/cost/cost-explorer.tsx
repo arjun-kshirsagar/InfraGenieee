@@ -19,22 +19,16 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Wallet, Wrench } from 'lucide-react';
+import { ArrowLeft, Wallet } from 'lucide-react';
 
 import type { CostData } from '@/app/cost/cost-client';
 import { INFRA_ROLE_LABEL } from '@/types/cost';
 import { buttonVariants } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from '@/components/ui/card';
 
 import { CostRecommendationSummary } from './cost-recommendation-summary';
 import { CostCaveats } from './cost-caveats';
+import { CostSelectors } from './cost-selectors';
 
 export interface CostExplorerProps {
   data: CostData;
@@ -89,42 +83,11 @@ export function CostExplorer({ data, onChangePrd, onRetryRecommendation }: CostE
         onRetry={onRetryRecommendation}
       />
 
-      {/* 🔜 F2 seam — the interactive selectors + live totals mount here. */}
-      <CostSelectorsPlaceholder providerCount={books.length} />
+      {/* F2 — the interactive selectors + live per-provider totals. */}
+      <CostSelectors data={data} />
 
       {/* Honest caveats — non-negotiable (docs §5). */}
       <CostCaveats books={books} />
     </div>
-  );
-}
-
-/**
- * Placeholder for the F2 interactive selectors + live per-provider totals. It
- * marks the seam clearly (so F2 knows exactly where to mount and what props are
- * available) and keeps the frame from looking broken in the meantime. F2
- * replaces this component with the real selector grid + comparison, reading
- * `catalog`, `books`, `requiredRoles` and `recommendation.recommendation.selections`
- * from the explorer's `data`.
- */
-function CostSelectorsPlaceholder({ providerCount }: { providerCount: number }) {
-  return (
-    <Card className="border-dashed">
-      <CardHeader>
-        <div className="flex items-center gap-2">
-          <Wrench className="size-5 text-muted-foreground" aria-hidden />
-          <CardTitle className="text-base">Interactive cost comparison</CardTitle>
-        </div>
-        <CardDescription>
-          Coming next: adjust services, sizes and usage per provider and watch the monthly totals
-          update live across {providerCount} {providerCount === 1 ? 'provider' : 'providers'} — with
-          a side-by-side comparison and charts.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <p className="rounded-md bg-muted/40 p-4 text-center text-sm text-muted-foreground">
-          Your PRD is loaded and prices are ready. The selectors and comparison view slot in here.
-        </p>
-      </CardContent>
-    </Card>
   );
 }
