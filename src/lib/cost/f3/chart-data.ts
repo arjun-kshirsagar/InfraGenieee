@@ -71,6 +71,66 @@ export function barsNeedCaveatLegend(bars: readonly ProviderBarDatum[]): boolean
   return bars.some((b) => b.state !== 'priced');
 }
 
+/**
+ * A readable Y-axis cap for the provider-totals chart.
+ *
+ * An `incomplete` floor can be a wild outlier — an unpriced per-second SKU can
+ * yield a nonsense $1.2M "floor" that, if it set the axis scale, would flatten
+ * every other provider's bar to an invisible sliver and make the money-shot
+ * chart useless. So we scale the axis to the largest *trustworthy* bar:
+ *
+ *   - Prefer the max over `priced` bars (complete, runnable — real numbers).
+ *   - Else, among the non-unsupported bars, use a ROBUST max: the largest value
+ *     that is not a lone extreme outlier. Concretely, if the top value is more
+ *     than 10x the next one, the top is treated as off-scale and the axis caps
+ *     at that next value — so a single garbage floor can't flatten the rest.
+ *   - If everything is genuinely zero, return a nominal 1 so the axis renders.
+ *
+ * Bars taller than the cap are drawn clamped to the cap and flagged `offScale`
+ * by `capBars` so the UI can mark them "off the chart" rather than silently
+ * truncating — the number is still shown in the tooltip and the cards.
+ */
+export function chartAxisCap(bars: readonly ProviderBarDatum[]): number {
+  const priced = bars.filter((b) => b.state === 'priced').map((b) => b.monthlyUsd);
+  if (priced.length > 0) {
+    const max = Math.max(...priced);
+    if (max > 0) return max;
+  }
+  // No priced bars — fall back to a robust max over the non-unsupported bars.
+  const values = bars
+    .filter((b) => b.state !== 'unsupported')
+    .map((b) => b.monthlyUsd)
+    .filter((v) => v > 0)
+    .sort((a, b) => b - a);
+  if (values.length === 0) return 1;
+  if (values.length === 1) return values[0];
+  const [top, next] = values;
+  // A lone extreme outlier (>10x the next bar) is capped OUT of the scale so the
+  // remaining bars stay legible; otherwise the true top sets the scale.
+  return top > next * 10 ? next : top;
+}
+
+export interface CappedBarDatum extends ProviderBarDatum {
+  /** Value used for the bar height (clamped to the axis cap). */
+  displayValue: number;
+  /** True when the real value exceeds the axis cap (drawn at the cap + marked). */
+  offScale: boolean;
+}
+
+/**
+ * Clamp bar heights to `cap` so one outlier floor cannot flatten the chart,
+ * while preserving the true value (in `monthlyUsd`) for the tooltip and marking
+ * clamped bars `offScale`. Purely presentational clamping — never changes a
+ * number the user reads, only how tall the rectangle is drawn.
+ */
+export function capBars(bars: readonly ProviderBarDatum[], cap: number): CappedBarDatum[] {
+  return bars.map((b) => ({
+    ...b,
+    displayValue: Math.min(b.monthlyUsd, cap),
+    offScale: b.monthlyUsd > cap,
+  }));
+}
+
 /* -------------------------------------------------------------------------- */
 /* Composition: where one provider's money goes, by role                      */
 /* -------------------------------------------------------------------------- */

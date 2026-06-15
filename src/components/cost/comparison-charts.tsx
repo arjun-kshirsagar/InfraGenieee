@@ -39,55 +39,62 @@ import {
   toProviderBars,
   toComposition,
   barsNeedCaveatLegend,
+  chartAxisCap,
+  capBars,
   paletteColor,
   type BarState,
-  type ProviderBarDatum,
+  type CappedBarDatum,
   type CompositionDatum,
 } from '@/lib/cost/f3/chart-data';
 
 /* -------------------------------------------------------------------------- */
-/* SVG hatch pattern defs — the "couldn't fully price / can't run" texture     */
+/* Bar fills — solid, muted colours (always paint) + an inline hatch swatch     */
+/* for the legend. SVG <pattern> fills proved unreliable to paint across        */
+/* separate <svg> elements, so bars use solid muted colours and the legend      */
+/* carries the textured swatch to teach the meaning.                            */
 /* -------------------------------------------------------------------------- */
 
-/** Stable ids so <Cell fill="url(#...)"> can reference them. */
-const HATCH_INCOMPLETE = 'infragenie-hatch-incomplete';
-const HATCH_UNSUPPORTED = 'infragenie-hatch-unsupported';
+const BAR_SOLID = 'hsl(221 83% 53%)'; // priced — blue (== palette[0])
+const INCOMPLETE_BASE = 'hsl(38 92% 50%)'; // amber — a floor
+const UNSUPPORTED_BASE = 'hsl(0 0% 60%)'; // muted grey — can't run
 
-const BAR_SOLID = 'hsl(221 83% 53%)'; // priced — same blue as palette[0]
-const INCOMPLETE_BASE = 'hsl(38 92% 50%)'; // amber
-const UNSUPPORTED_BASE = 'hsl(0 0% 60%)'; // muted grey
-
-function HatchDefs() {
-  return (
-    <defs>
-      <pattern
-        id={HATCH_INCOMPLETE}
-        patternUnits="userSpaceOnUse"
-        width="6"
-        height="6"
-        patternTransform="rotate(45)"
-      >
-        <rect width="6" height="6" fill={INCOMPLETE_BASE} opacity={0.18} />
-        <line x1="0" y1="0" x2="0" y2="6" stroke={INCOMPLETE_BASE} strokeWidth="3" />
-      </pattern>
-      <pattern
-        id={HATCH_UNSUPPORTED}
-        patternUnits="userSpaceOnUse"
-        width="6"
-        height="6"
-        patternTransform="rotate(45)"
-      >
-        <rect width="6" height="6" fill={UNSUPPORTED_BASE} opacity={0.15} />
-        <line x1="0" y1="0" x2="0" y2="6" stroke={UNSUPPORTED_BASE} strokeWidth="3" />
-      </pattern>
-    </defs>
-  );
+/** Fill per bar state. Incomplete/unsupported use a muted tone (not the
+ *  confident priced blue) so the eye reads "not a clean number"; the legend and
+ *  tooltip carry the words. */
+function barFill(state: BarState): string {
+  if (state === 'incomplete') return INCOMPLETE_BASE;
+  if (state === 'unsupported') return UNSUPPORTED_BASE;
+  return BAR_SOLID;
 }
 
-function barFill(state: BarState): string {
-  if (state === 'incomplete') return `url(#${HATCH_INCOMPLETE})`;
-  if (state === 'unsupported') return `url(#${HATCH_UNSUPPORTED})`;
-  return BAR_SOLID;
+/** A small inline hatched swatch for the legend (rendered in its own complete
+ *  <svg> with its own local <defs>, so the pattern always paints here). */
+function HatchSwatch({ base }: { base: string }) {
+  const id = React.useId().replace(/[:]/g, '');
+  return (
+    <svg width="14" height="14" aria-hidden className="shrink-0">
+      <defs>
+        <pattern
+          id={id}
+          patternUnits="userSpaceOnUse"
+          width="5"
+          height="5"
+          patternTransform="rotate(45)"
+        >
+          <rect width="5" height="5" fill={base} opacity={0.2} />
+          <line x1="0" y1="0" x2="0" y2="5" stroke={base} strokeWidth="2.5" />
+        </pattern>
+      </defs>
+      <rect
+        width="14"
+        height="14"
+        rx="2"
+        fill={`url(#${id})`}
+        stroke="hsl(0 0% 45% / 0.5)"
+        strokeWidth="1"
+      />
+    </svg>
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -99,7 +106,7 @@ interface TooltipPayload<T> {
   payload?: { payload: T }[];
 }
 
-function ProviderBarTooltip({ active, payload }: TooltipPayload<ProviderBarDatum>) {
+function ProviderBarTooltip({ active, payload }: TooltipPayload<CappedBarDatum>) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
   return (
@@ -112,6 +119,7 @@ function ProviderBarTooltip({ active, payload }: TooltipPayload<ProviderBarDatum
           {d.state === 'incomplete' ? '\u2265 ' : ''}
           {formatUsd(d.monthlyUsd)}/mo
           {d.state === 'incomplete' ? ' (floor)' : ''}
+          {d.offScale ? ' \u2014 off the chart' : ''}
         </p>
       )}
     </div>
@@ -141,16 +149,24 @@ function CompositionTooltip({ active, payload }: TooltipPayload<CompositionDatum
 /* -------------------------------------------------------------------------- */
 
 function ProviderTotalsChart({ estimates }: { estimates: readonly ProviderEstimate[] }) {
-  const bars = React.useMemo(() => toProviderBars(estimates), [estimates]);
-  const needsLegend = barsNeedCaveatLegend(bars);
-  const allZero = bars.every((b) => b.monthlyUsd === 0);
+  const { bars, cap, needsLegend, allZero, anyOffScale } = React.useMemo(() => {
+    const raw = toProviderBars(estimates);
+    const axisCap = chartAxisCap(raw);
+    const capped = capBars(raw, axisCap);
+    return {
+      bars: capped,
+      cap: axisCap,
+      needsLegend: barsNeedCaveatLegend(raw),
+      allZero: raw.every((b) => b.monthlyUsd === 0),
+      anyOffScale: capped.some((b) => b.offScale),
+    };
+  }, [estimates]);
 
   return (
     <div className="flex flex-col gap-3">
       <div className="h-64 w-full sm:h-72">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={bars as ProviderBarDatum[]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
-            <HatchDefs />
+          <BarChart data={bars} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
             <XAxis
               dataKey="label"
@@ -166,11 +182,11 @@ function ProviderTotalsChart({ estimates }: { estimates: readonly ProviderEstima
               tick={{ fontSize: 11 }}
               width={52}
               className="fill-muted-foreground"
-              // A flat-zero domain would draw nothing; give it a nominal top.
-              domain={allZero ? [0, 1] : [0, 'auto']}
+              domain={[0, allZero ? 1 : cap]}
+              allowDataOverflow
             />
             <RTooltip content={<ProviderBarTooltip />} cursor={{ fill: 'hsl(0 0% 50% / 0.06)' }} />
-            <Bar dataKey="monthlyUsd" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+            <Bar dataKey="displayValue" radius={[4, 4, 0, 0]} isAnimationActive={false}>
               {bars.map((b) => (
                 <Cell
                   key={b.provider}
@@ -183,23 +199,26 @@ function ProviderTotalsChart({ estimates }: { estimates: readonly ProviderEstima
           </BarChart>
         </ResponsiveContainer>
       </div>
+      {anyOffScale ? (
+        <p className="text-xs text-muted-foreground">
+          Some floors are drawn clamped to keep the chart legible — their real (higher) values are in
+          the tooltip and the cards below.
+        </p>
+      ) : null}
       {needsLegend ? (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <LegendSwatch fill={barFill('incomplete')} label="Floor — an unpriced required line (real cost is higher)" />
-          <LegendSwatch fill={barFill('unsupported')} label="Can’t run this app — not a comparable total" />
+          <LegendSwatch base={INCOMPLETE_BASE} label="Floor — an unpriced required line (real cost is higher)" />
+          <LegendSwatch base={UNSUPPORTED_BASE} label="Can’t run this app — not a comparable total" />
         </div>
       ) : null}
     </div>
   );
 }
 
-function LegendSwatch({ fill, label }: { fill: string; label: string }) {
+function LegendSwatch({ base, label }: { base: string; label: string }) {
   return (
     <span className="inline-flex items-center gap-1.5">
-      <svg width="14" height="14" aria-hidden className="shrink-0">
-        <HatchDefs />
-        <rect width="14" height="14" rx="2" fill={fill} stroke="hsl(0 0% 45% / 0.5)" strokeWidth="1" />
-      </svg>
+      <HatchSwatch base={base} />
       {label}
     </span>
   );
@@ -225,7 +244,6 @@ function CompositionChart({ estimate }: { estimate: ProviderEstimate }) {
       <div className="h-56 w-full sm:h-64 sm:w-1/2">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
-            <HatchDefs />
             <Pie
               data={data}
               dataKey="monthlyUsd"
@@ -243,7 +261,7 @@ function CompositionChart({ estimate }: { estimate: ProviderEstimate }) {
               {data.map((d, i) => (
                 <Cell
                   key={d.role}
-                  fill={d.incomplete ? `url(#${HATCH_INCOMPLETE})` : paletteColor(i)}
+                  fill={d.incomplete ? INCOMPLETE_BASE : paletteColor(i)}
                   stroke="hsl(0 0% 100% / 0.6)"
                   strokeWidth={1}
                 />

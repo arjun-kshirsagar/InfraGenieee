@@ -34,6 +34,8 @@ import {
   toProviderBars,
   toComposition,
   barsNeedCaveatLegend,
+  chartAxisCap,
+  capBars,
   paletteColor,
   CHART_PALETTE,
 } from './chart-data';
@@ -320,6 +322,63 @@ describe('palette', () => {
   it('wraps around and is stable per index', () => {
     expect(paletteColor(0)).toBe(CHART_PALETTE[0]);
     expect(paletteColor(CHART_PALETTE.length)).toBe(CHART_PALETTE[0]);
+  });
+});
+
+describe('chartAxisCap + capBars', () => {
+  it('scales the axis to the largest priced (complete) bar, ignoring floor outliers', () => {
+    const bars = toProviderBars([
+      estimate({ provider: 'aws', monthlyUsd: 80 }), // priced
+      estimate({ provider: 'gcp', monthlyUsd: 1_200_000, incomplete: true }), // wild floor
+      estimate({ provider: 'vercel', monthlyUsd: 5, unsupportedRoles: ['db-relational'] }),
+    ]);
+    // The $1.2M floor must NOT set the scale — the priced $80 bar does.
+    expect(chartAxisCap(bars)).toBe(80);
+  });
+
+  it('falls back to the non-unsupported max when there is a single floor bar', () => {
+    const bars = toProviderBars([
+      estimate({ provider: 'aws', monthlyUsd: 40, incomplete: true }),
+      estimate({ provider: 'vercel', monthlyUsd: 999, unsupportedRoles: ['db-relational'] }),
+    ]);
+    expect(chartAxisCap(bars)).toBe(40);
+  });
+
+  it('caps a lone extreme floor outlier out of the scale (all-floor case)', () => {
+    // No priced bars; GCP is a garbage $1.2M floor, the rest are small floors.
+    const bars = toProviderBars([
+      estimate({ provider: 'aws', monthlyUsd: 50, incomplete: true }),
+      estimate({ provider: 'gcp', monthlyUsd: 1_200_000, incomplete: true }),
+      estimate({ provider: 'digitalocean', monthlyUsd: 43, incomplete: true }),
+    ]);
+    // Top ($1.2M) is >10x the next ($50) → axis caps at $50, keeping DO/AWS legible.
+    expect(chartAxisCap(bars)).toBe(50);
+    const capped = capBars(bars, chartAxisCap(bars));
+    expect(capped.find((b) => b.provider === 'gcp')!.offScale).toBe(true);
+    expect(capped.find((b) => b.provider === 'aws')!.offScale).toBe(false);
+  });
+
+  it('returns a nominal 1 when every bar is genuinely zero', () => {
+    const bars = toProviderBars([
+      estimate({ provider: 'aws', monthlyUsd: 0, items: [] }),
+      estimate({ provider: 'gcp', monthlyUsd: 0, items: [] }),
+    ]);
+    expect(chartAxisCap(bars)).toBe(1);
+  });
+
+  it('clamps a bar taller than the cap and flags it offScale, preserving the true value', () => {
+    const bars = toProviderBars([
+      estimate({ provider: 'aws', monthlyUsd: 80 }),
+      estimate({ provider: 'gcp', monthlyUsd: 1_200_000, incomplete: true }),
+    ]);
+    const capped = capBars(bars, chartAxisCap(bars));
+    const gcp = capped.find((b) => b.provider === 'gcp')!;
+    expect(gcp.displayValue).toBe(80); // clamped to the cap
+    expect(gcp.monthlyUsd).toBe(1_200_000); // true value preserved for the tooltip
+    expect(gcp.offScale).toBe(true);
+    const aws = capped.find((b) => b.provider === 'aws')!;
+    expect(aws.offScale).toBe(false);
+    expect(aws.displayValue).toBe(80);
   });
 });
 
