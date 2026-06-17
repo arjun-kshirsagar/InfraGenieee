@@ -24,5 +24,8 @@ Next.js (App Router) + TypeScript (strict) + Tailwind + shadcn/ui. Charts: Recha
   - Never leave a `next build` / `next start` / `next dev` process running in the background when you finish; kill any server you started.
 - **One task runs at a time** (concurrency capped at 1), so builds no longer collide — a clean build should succeed.
 
+## Handoff: COMPLETE your task, do not BLOCK it
+When your build task is finished and pushed, call `kanban_complete` — NOT `kanban_block`. `block` means "I am stuck / need input" and the dependency engine treats a blocked task as NOT done, which deadlocks any review/child task waiting on it. If a separate reviewer task exists, completing yours is what promotes the review to ready. Only use `block` when you genuinely cannot proceed (missing info, real error, needs owner approval). "Ready for review" is a COMPLETE, never a block.
+
 ## Repo
 `Vishesh-Paliwal/InfraGenieee` — the only repo agents may push to.
