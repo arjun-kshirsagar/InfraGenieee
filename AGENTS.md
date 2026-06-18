@@ -27,5 +27,11 @@ Next.js (App Router) + TypeScript (strict) + Tailwind + shadcn/ui. Charts: Recha
 ## Handoff: COMPLETE your task, do not BLOCK it
 When your build task is finished and pushed, call `kanban_complete` — NOT `kanban_block`. `block` means "I am stuck / need input" and the dependency engine treats a blocked task as NOT done, which deadlocks any review/child task waiting on it. If a separate reviewer task exists, completing yours is what promotes the review to ready. Only use `block` when you genuinely cannot proceed (missing info, real error, needs owner approval). "Ready for review" is a COMPLETE, never a block.
 
+## Screenshots: keep them under 8000px (vision limit)
+The vision model REJECTS any image whose width or height exceeds 8000 pixels (HTTP 400 "image dimensions exceed max allowed size"). Long pages (the cost comparison view, a full PRD) produce full-page screenshots 9000px+ tall, which then cannot be analyzed and waste retries. Rules:
+- Prefer VIEWPORT screenshots (e.g. 1280x800), not `full_page: true`, when you need the model to SEE the result.
+- If you must capture a long page, scroll and take several viewport-height shots, or cap/resize the image below 8000px before analysis.
+- Screenshots you only SEND to the owner (via send_to_owner.sh) can be any size — the limit only applies to images fed to the vision model for analysis.
+
 ## Repo
 `Vishesh-Paliwal/InfraGenieee` — the only repo agents may push to.
