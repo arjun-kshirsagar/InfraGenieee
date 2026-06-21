@@ -22,6 +22,7 @@ import { Sparkles, TriangleAlert } from 'lucide-react';
 import type { CloudProvider, ProviderEstimate } from '@/types/cost';
 import { PROVIDER_LABEL, PRICED_REGION_LABEL } from '@/types/cost';
 import { formatUsd } from '@/lib/cost/f2/format';
+import { isEntirelyUnpriced } from '@/lib/cost/estimate/engine';
 import { Badge } from '@/components/ui/badge';
 
 export interface ProviderTabsProps {
@@ -47,6 +48,9 @@ export function ProviderTabs({
           const est = estimates[provider];
           const unsupported = (est?.unsupportedRoles.length ?? 0) > 0;
           const incomplete = est?.incomplete ?? false;
+          // Zero priced dimensions (services selected) → "not priced", never
+          // "≥ $0.00" (MINOR-1).
+          const notPriced = est ? isEntirelyUnpriced(est) : false;
           return (
             <TabsPrimitive.Tab
               key={provider}
@@ -64,7 +68,11 @@ export function ProviderTabs({
               </span>
               <div className="flex w-full min-w-0 items-center justify-between gap-1">
                 <span className="truncate text-sm font-semibold tabular-nums">
-                  {est ? `${incomplete ? '≥ ' : ''}${formatUsd(est.monthlyUsd)}` : '—'}
+                  {!est
+                    ? '—'
+                    : notPriced
+                      ? 'Not priced'
+                      : `${incomplete ? '≥ ' : ''}${formatUsd(est.monthlyUsd)}`}
                 </span>
                 {unsupported ? (
                   <TriangleAlert

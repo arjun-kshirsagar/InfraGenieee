@@ -491,8 +491,19 @@ export const priceSourceSchema = z.object({
   url: z.string().url(),
   /** ISO-8601, when the page was fetched (not when it was parsed). */
   fetchedAt: z.string().min(20),
-  /** Verbatim excerpt from the page containing the number. Never paraphrased. */
-  evidence: z.string().min(3).max(600),
+  /**
+   * Verbatim excerpt from the page containing the number. Never paraphrased.
+   *
+   * The cap must be at least as large as a serialised price-feed record, because
+   * docs §5 defines feed `evidence` AS "the serialised matched record" (the whole
+   * Azure Retail / AWS Price List item, whitespace-padded so its numbers are
+   * clean tokens). A real Azure Retail item serialises to ~750–900 chars; a cap
+   * below that silently voids an entire provider's book (BLOCKER-3). 2000 keeps
+   * a comfortable margin for the largest real feed records while still bounding
+   * the field so a runaway blob cannot bloat the response. The substring/number
+   * gate (`assertEvidenceSupportsPrice`) is unchanged — this only widens storage.
+   */
+  evidence: z.string().min(3).max(2000),
   /** Which model performed the extraction, for provenance across model swaps. */
   extractorModel: z.string().min(1).max(80),
 });
@@ -526,6 +537,7 @@ export const priceGapSchema = z.object({
     'not_found_on_page', // extractor found nothing matching the hint
     'evidence_rejected', // failed the substring/number gate — treated as absent
     'ambiguous', // multiple conflicting candidates
+    'invalid_record', // a candidate that passed the gate but failed schema validation
   ]),
   detail: z.string().max(300).optional(),
 });

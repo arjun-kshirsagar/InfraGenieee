@@ -44,6 +44,7 @@ const GAP_REASON_LABEL: Record<PriceGap['reason'], string> = {
   not_found_on_page: 'no matching price was found on the page',
   evidence_rejected: 'the price failed our source-match check and was dropped',
   ambiguous: 'the page had conflicting prices',
+  invalid_record: 'the fetched price failed validation and was dropped',
 };
 
 function formatDate(iso: string): string {

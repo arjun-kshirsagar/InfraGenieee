@@ -39,6 +39,7 @@
 
 import {
   priceBookSchema,
+  priceRecordSchema,
   PRICING_PIPELINE_VERSION,
   PRICED_REGION,
   type CloudProvider,
@@ -461,6 +462,42 @@ function resolveMany(target: DimensionTarget, resolveds: Resolved[]): Resolved {
 }
 
 /**
+ * Per-record schema gate (RC2 / BLOCKER-3): every candidate record is validated
+ * against `priceRecordSchema` BEFORE the book is assembled. A record that fails
+ * (e.g. a slightly-too-long evidence string, a NaN price) becomes a
+ * `PriceGap{reason:'invalid_record'}` — exactly like an evidence-gate rejection.
+ *
+ * This is the fail-closed granularity docs §6 requires: one malformed record
+ * must NOT take the whole provider's book down (the old behaviour threw at
+ * `priceBookSchema.safeParse`, dropping all 8 good Azure records for one bad
+ * one). The other records in the same book survive untouched.
+ */
+function validateRecords(
+  records: PriceRecord[],
+  gaps: PriceGap[],
+): { records: PriceRecord[]; gaps: PriceGap[] } {
+  const validRecords: PriceRecord[] = [];
+  const outGaps = [...gaps];
+  for (const r of records) {
+    const parsed = priceRecordSchema.safeParse(r);
+    if (parsed.success) {
+      validRecords.push(parsed.data);
+    } else {
+      outGaps.push({
+        skuId: r.skuId,
+        dimensionId: r.dimensionId,
+        reason: 'invalid_record',
+        detail: parsed.error.issues
+          .map((i) => `${i.path.join('.')}: ${i.message}`)
+          .join('; ')
+          .slice(0, 300),
+      });
+    }
+  }
+  return { records: validRecords, gaps: outGaps };
+}
+
+/**
  * Final safety net: de-duplicate records by (skuId, dimensionId) so the book can
  * never fail `priceBookSchema`'s duplicate check. Identical prices collapse to
  * one; a slipped-through conflict becomes an `ambiguous` gap (both records are
@@ -545,7 +582,13 @@ export function makeBuildPriceBook(deps: BuildDeps = defaultDeps): BuildPriceBoo
       ? await buildViaFeeds(provider, targets, deps, options)
       : await buildViaExtractor(provider, targets, deps, options);
 
-    const deduped = dedupeRecords(records, gaps);
+    // RC2: validate every record against `priceRecordSchema` FIRST. A single
+    // malformed record (e.g. an over-long evidence blob) becomes an
+    // `invalid_record` gap instead of throwing at `priceBookSchema.safeParse`
+    // below and taking the entire book down with it (BLOCKER-3).
+    const validated = validateRecords(records, gaps);
+
+    const deduped = dedupeRecords(validated.records, validated.gaps);
 
     const book: PriceBook = {
       provider,
@@ -585,6 +628,7 @@ export const _internal = {
   servicesFor,
   resolveExtracted,
   resolveMany,
+  validateRecords,
   dedupeRecords,
   feedResultToResolved,
   defaultDeps,

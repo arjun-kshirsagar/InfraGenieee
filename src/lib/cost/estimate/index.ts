@@ -15,6 +15,8 @@ export { deriveQuantities, UNIT_EXEMPT_KEYS } from './quantities';
 export {
   estimateProvider,
   compare,
+  hasAnyPricedDimension,
+  isEntirelyUnpriced,
   type EstimateProviderInput,
   type CompareInput,
 } from './engine';

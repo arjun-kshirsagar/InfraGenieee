@@ -26,6 +26,8 @@ import {
   type ProviderEstimate,
 } from '@/types/cost';
 
+import { isEntirelyUnpriced } from '../estimate/engine';
+
 /* -------------------------------------------------------------------------- */
 /* Per-provider comparison row                                                */
 /* -------------------------------------------------------------------------- */
@@ -59,6 +61,11 @@ export interface ComparisonRow {
   unsupportedRoleLabels: string[];
   /** A required dimension somewhere is unpriced → the total is a FLOOR. */
   incomplete: boolean;
+  /** 🔴 The provider priced NOTHING — its book is 100% missing, so `monthlyUsd`
+   *  is a $0 floor of pure unknowns, not a comparable cost. The UI must render
+   *  "not priced" (no dollar figure), NOT "≥ $0.00", and this row sorts after
+   *  every priced/floor row (BLOCKER-3 / MINOR-1). */
+  notPriced: boolean;
   lines: ComparisonLineSummary[];
   /** Which badges this provider won, in a stable order. Empty when none. */
   badges: BadgeKind[];
@@ -99,6 +106,7 @@ export function toComparisonRow(
     runnable: estimate.unsupportedRoles.length === 0,
     unsupportedRoleLabels: estimate.unsupportedRoles.map((r) => INFRA_ROLE_LABEL[r]),
     incomplete: estimate.incomplete,
+    notPriced: isEntirelyUnpriced(estimate),
     lines: estimate.items.map(summariseLine),
     badges,
   };
@@ -110,11 +118,15 @@ export function toComparisonRow(
  * Sort order (deterministic — ties fall back to the estimate array order, which
  * is provider enum order):
  *   1. runnable providers first, unrunnable ("can't run this app") last;
- *   2. within runnable, complete estimates before incomplete floors;
- *   3. within each group, cheapest monthly first.
+ *   2. within runnable, providers that priced SOMETHING before ones that priced
+ *      NOTHING (a 100%-missing book is a $0 floor of pure unknowns — it must
+ *      never sort ahead of a real estimate just because its floor is $0);
+ *   3. within that, complete estimates before incomplete floors;
+ *   4. within each group, cheapest monthly first.
  *
- * This guarantees a provider that can't run the app is never displayed as the
- * top/cheap choice, matching the engine's `cheapest` exclusion.
+ * This guarantees a provider that can't run the app — or that couldn't price a
+ * single dimension — is never displayed as the top/cheap choice, matching the
+ * engine's `cheapest` and badge exclusions (BLOCKER-3 / RC4).
  */
 export function buildComparisonRows(
   estimates: readonly ProviderEstimate[],
@@ -127,6 +139,9 @@ export function buildComparisonRows(
   return [...rows].sort((a, b) => {
     if (a.runnable !== b.runnable) return a.runnable ? -1 : 1;
     if (a.runnable) {
+      // priced-something before priced-nothing: a $0 floor of pure unknowns must
+      // never sort ahead of a real estimate (RC4).
+      if (a.notPriced !== b.notPriced) return a.notPriced ? 1 : -1;
       // complete before incomplete floor
       if (a.incomplete !== b.incomplete) return a.incomplete ? 1 : -1;
       if (a.monthlyUsd !== b.monthlyUsd) return a.monthlyUsd - b.monthlyUsd;

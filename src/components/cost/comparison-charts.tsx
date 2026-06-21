@@ -57,13 +57,15 @@ import {
 const BAR_SOLID = 'hsl(221 83% 53%)'; // priced — blue (== palette[0])
 const INCOMPLETE_BASE = 'hsl(38 92% 50%)'; // amber — a floor
 const UNSUPPORTED_BASE = 'hsl(0 0% 60%)'; // muted grey — can't run
+const NOTPRICED_BASE = 'hsl(0 0% 72%)'; // light grey — couldn't price at all
 
-/** Fill per bar state. Incomplete/unsupported use a muted tone (not the
- *  confident priced blue) so the eye reads "not a clean number"; the legend and
- *  tooltip carry the words. */
+/** Fill per bar state. Incomplete/unsupported/notpriced use a muted tone (not
+ *  the confident priced blue) so the eye reads "not a clean number"; the legend
+ *  and tooltip carry the words. */
 function barFill(state: BarState): string {
   if (state === 'incomplete') return INCOMPLETE_BASE;
   if (state === 'unsupported') return UNSUPPORTED_BASE;
+  if (state === 'notpriced') return NOTPRICED_BASE;
   return BAR_SOLID;
 }
 
@@ -114,6 +116,8 @@ function ProviderBarTooltip({ active, payload }: TooltipPayload<CappedBarDatum>)
       <p className="font-medium">{d.label}</p>
       {d.state === 'unsupported' ? (
         <p className="mt-0.5 text-destructive">Can&rsquo;t run this app — not comparable</p>
+      ) : d.state === 'notpriced' ? (
+        <p className="mt-0.5 text-muted-foreground">Couldn&rsquo;t price — not $0.00</p>
       ) : (
         <p className="mt-0.5 tabular-nums">
           {d.state === 'incomplete' ? '\u2265 ' : ''}
@@ -149,16 +153,26 @@ function CompositionTooltip({ active, payload }: TooltipPayload<CompositionDatum
 /* -------------------------------------------------------------------------- */
 
 function ProviderTotalsChart({ estimates }: { estimates: readonly ProviderEstimate[] }) {
-  const { bars, cap, needsLegend, allZero, anyOffScale } = React.useMemo(() => {
+  const { bars, cap, needsLegend, allZero, anyOffScale, anyNotPriced } = React.useMemo(() => {
     const raw = toProviderBars(estimates);
     const axisCap = chartAxisCap(raw);
     const capped = capBars(raw, axisCap);
+    // A 'notpriced' provider has a $0 value → a zero-height (invisible) bar. Give
+    // it a small visible stub so the reader SEES a marker ("couldn't price",
+    // hatched/greyed) instead of a silent gap that reads as "free"/"cheapest".
+    // The stub is presentational only; the tooltip states "couldn't price".
+    const withStub = capped.map((b) =>
+      b.state === 'notpriced'
+        ? { ...b, displayValue: Math.max(b.displayValue, axisCap * 0.04) }
+        : b,
+    );
     return {
-      bars: capped,
+      bars: withStub,
       cap: axisCap,
       needsLegend: barsNeedCaveatLegend(raw),
       allZero: raw.every((b) => b.monthlyUsd === 0),
       anyOffScale: capped.some((b) => b.offScale),
+      anyNotPriced: raw.some((b) => b.state === 'notpriced'),
     };
   }, [estimates]);
 
@@ -209,6 +223,9 @@ function ProviderTotalsChart({ estimates }: { estimates: readonly ProviderEstima
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <LegendSwatch base={INCOMPLETE_BASE} label="Floor — an unpriced required line (real cost is higher)" />
           <LegendSwatch base={UNSUPPORTED_BASE} label="Can’t run this app — not a comparable total" />
+          {anyNotPriced ? (
+            <LegendSwatch base={NOTPRICED_BASE} label="Couldn’t price — no verified price (not $0.00)" />
+          ) : null}
         </div>
       ) : null}
     </div>

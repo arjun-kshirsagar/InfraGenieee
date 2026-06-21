@@ -389,6 +389,34 @@ function argminCost(candidates: readonly ProviderEstimate[]): CloudProvider | nu
   return best ? best.provider : null;
 }
 
+/** True when the estimate has at least one dimension that carries a real,
+ *  gate-proven price (a non-null `source`). Used to distinguish "priced at zero"
+ *  (a real, gate-proven price that computes to $0 — a provider EARNED the zero)
+ *  from "couldn't price at all" (below). */
+export function hasAnyPricedDimension(estimate: ProviderEstimate): boolean {
+  return estimate.items.some((item) =>
+    item.dimensions.some((d) => !d.unpriced && d.source !== null),
+  );
+}
+
+/**
+ * True when the estimate has line items but NONE of them carry a single priced
+ * dimension — i.e. services WERE selected but every price is a gap, so the whole
+ * price book is missing (the Azure BLOCKER-3 case). Such an estimate's
+ * `monthlyUsd` is a $0 floor of pure unknowns, not a comparable cost: it must
+ * NOT win a price-adjacent badge (RC3), must sort last (RC4), and must render as
+ * "not priced" rather than "≥ $0.00" (MINOR-1).
+ *
+ * 🔴 This is deliberately NOT the same as `monthlyUsd === 0`: a provider whose
+ * priced dimensions genuinely total $0 (e.g. only free-tier lines) HAS priced
+ * dimensions and "earned the zero" — it stays priced. And an estimate with NO
+ * items at all (an empty selection) is a separate degenerate state, not this
+ * one.
+ */
+export function isEntirelyUnpriced(estimate: ProviderEstimate): boolean {
+  return estimate.items.length > 0 && !hasAnyPricedDimension(estimate);
+}
+
 export interface CompareInput {
   estimates: readonly ProviderEstimate[];
   /** Catalog services, for the editorial-score badges. */
@@ -423,11 +451,22 @@ export function compare(input: CompareInput): CostComparison {
   );
 
   const cheapest = hasComparison ? argminCost(cheapestCandidates) : null;
+
+  // 🔴 bestScaling / simplest are editorial scores, but docs §8 forbids them
+  // from standing in for a MISSING price. A provider whose price book is 100%
+  // missing (services selected, zero priced dimensions) has a $0 floor of pure
+  // unknowns — it must never win a badge on the strength of a scaling/simplicity
+  // score alone (RC3 / BLOCKER-3). Filter those out before the argmax. (A
+  // provider that is merely `incomplete` — some priced, one required line
+  // unpriced — still qualifies: it has real prices and the score is honestly
+  // earned. A provider that priced genuinely $0 also qualifies — it earned it.)
+  const scored = estimates.filter((e) => !isEntirelyUnpriced(e));
+
   const bestScaling = hasComparison
-    ? argmax(estimates, (e) => sumServiceScore(e, serviceIndex, (s) => s.scalingScore))
+    ? argmax(scored, (e) => sumServiceScore(e, serviceIndex, (s) => s.scalingScore))
     : null;
   const simplest = hasComparison
-    ? argmax(estimates, (e) => sumServiceScore(e, serviceIndex, (s) => s.simplicityScore))
+    ? argmax(scored, (e) => sumServiceScore(e, serviceIndex, (s) => s.simplicityScore))
     : null;
 
   return {

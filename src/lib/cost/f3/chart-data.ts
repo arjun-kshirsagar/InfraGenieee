@@ -26,12 +26,13 @@ import {
   type InfraRole,
   type ProviderEstimate,
 } from '@/types/cost';
+import { isEntirelyUnpriced } from '../estimate/engine';
 
 /* -------------------------------------------------------------------------- */
 /* Grouped bar: monthly total per provider                                    */
 /* -------------------------------------------------------------------------- */
 
-export type BarState = 'priced' | 'incomplete' | 'unsupported';
+export type BarState = 'priced' | 'incomplete' | 'unsupported' | 'notpriced';
 
 export interface ProviderBarDatum {
   provider: CloudProvider;
@@ -47,6 +48,14 @@ export interface ProviderBarDatum {
 
 function barState(e: ProviderEstimate): BarState {
   if (e.unsupportedRoles.length > 0) return 'unsupported';
+  // 🔴 Services selected but ZERO priced dimensions → we could NOT price this
+  // provider at all. Its $0 is a floor of pure unknowns, NOT a real total. Draw
+  // it as an explicit "couldn't price" marker, never a (possibly zero-height)
+  // confident bar (BLOCKER-3 / MINOR-1). A provider that priced genuinely $0
+  // (only free-tier lines) HAS priced dimensions → stays 'priced' (it earned
+  // the zero). Checked before `incomplete` because notpriced is the stronger,
+  // more specific state.
+  if (isEntirelyUnpriced(e)) return 'notpriced';
   if (e.incomplete) return 'incomplete';
   return 'priced';
 }

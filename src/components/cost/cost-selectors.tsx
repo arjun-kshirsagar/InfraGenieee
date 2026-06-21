@@ -35,7 +35,7 @@ import {
   type UsageProfile,
   type InfraRole,
 } from '@/types/cost';
-import { estimateProvider, compare } from '@/lib/cost/estimate';
+import { estimateProvider, compare, isEntirelyUnpriced } from '@/lib/cost/estimate';
 import {
   buildRoleRows,
   seedAllSelections,
@@ -273,8 +273,9 @@ export function CostSelectors({ data }: CostSelectorsProps) {
             <div className="flex items-center justify-between text-sm">
               <span className="font-medium">Total for {PROVIDER_LABEL[active]}</span>
               <span className="text-lg font-semibold tabular-nums">
-                {activeEstimate.incomplete ? '≥ ' : ''}
-                {formatUsd(activeEstimate.monthlyUsd)}
+                {isEntirelyUnpriced(activeEstimate)
+                  ? 'Not priced'
+                  : `${activeEstimate.incomplete ? '≥ ' : ''}${formatUsd(activeEstimate.monthlyUsd)}`}
               </span>
             </div>
           </CardContent>

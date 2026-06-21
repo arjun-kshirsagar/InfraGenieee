@@ -29,6 +29,7 @@ import {
 } from '@/types/cost';
 
 import { formatUsd, formatFetchedDate } from '@/lib/cost/f2/format';
+import { isEntirelyUnpriced } from '@/lib/cost/estimate/engine';
 
 /** Inferred from the contract's `providerTradeoffSchema` (no exported type in
  *  the architect-owned contract; inferred here rather than editing it). */
@@ -44,11 +45,18 @@ export interface ExportMarkdownInput {
   now: number;
 }
 
-/** Cost cell: a floor gets a "≥" and an unsupported provider is stated. */
+/** Cost cell: an unsupported provider is stated, a zero-priced provider is
+ *  "not priced" (no $0.00), and a floor gets a "≥". */
 function totalCell(e: ProviderEstimate): string {
   if (e.unsupportedRoles.length > 0) {
     const missing = e.unsupportedRoles.map((r) => INFRA_ROLE_LABEL[r]).join(', ');
     return `**cannot run this app** (missing: ${missing})`;
+  }
+  // 🔴 Services selected but zero priced dimensions → there is no floor to
+  // state. "≥ $0.00/mo" is not meaningful (BLOCKER-3 / MINOR-1); say "not
+  // priced" with no dollar figure.
+  if (isEntirelyUnpriced(e)) {
+    return '**not priced** *(no verified price \u2014 not $0.00)*';
   }
   return `${e.incomplete ? '\u2265 ' : ''}${formatUsd(e.monthlyUsd)}/mo${
     e.incomplete ? ' *(floor \u2014 an unpriced required line)*' : ''

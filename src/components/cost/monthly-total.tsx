@@ -21,6 +21,7 @@ import { AlertTriangle, TriangleAlert } from 'lucide-react';
 import type { ProviderEstimate } from '@/types/cost';
 import { INFRA_ROLE_LABEL } from '@/types/cost';
 import { formatUsd } from '@/lib/cost/f2/format';
+import { isEntirelyUnpriced } from '@/lib/cost/estimate/engine';
 
 function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = React.useState(false);
@@ -92,6 +93,42 @@ export function MonthlyTotal({ estimate, regionLabel }: MonthlyTotalProps) {
   const animated = useAnimatedNumber(estimate.monthlyUsd, reduced);
   const incomplete = estimate.incomplete;
   const hasUnsupported = estimate.unsupportedRoles.length > 0;
+  // 🔴 Services selected but zero priced dimensions → there is no floor to
+  // state. "≥ $0.00" is not meaningful (BLOCKER-3 / MINOR-1); render "not
+  // priced" with no dollar figure.
+  const notPriced = isEntirelyUnpriced(estimate);
+
+  if (notPriced) {
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="flex items-baseline gap-2">
+          <span
+            className="text-3xl font-semibold tracking-tight text-muted-foreground sm:text-4xl"
+            aria-live="polite"
+            aria-label="Monthly cost not priced — no price could be verified for this provider"
+          >
+            Not priced
+          </span>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          For {regionLabel}. We couldn&rsquo;t verify a single price for this provider, so there is no
+          cost to show — not $0.00. See the breakdown for which lines are unpriced.
+        </p>
+
+        {hasUnsupported ? (
+          <div className="flex items-start gap-1.5 rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-1.5 text-xs text-destructive">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span>
+              This provider can&rsquo;t run{' '}
+              {estimate.unsupportedRoles.map((r) => INFRA_ROLE_LABEL[r]).join(', ')} — it cannot run
+              this app on its own, so this total is not comparable.
+            </span>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-2">

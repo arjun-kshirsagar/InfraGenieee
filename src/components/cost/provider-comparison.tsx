@@ -115,17 +115,25 @@ function ProviderCard({
           <ProviderBadges comparison={comparison} provider={row.provider} />
         </div>
 
-        {/* Total — floor / unsupported honesty carried over */}
+        {/* Total — floor / unsupported / not-priced honesty carried over */}
         {row.runnable ? (
-          <div className="flex items-baseline gap-1.5">
-            {row.incomplete ? (
-              <span className="text-xs font-medium text-amber-600">at least</span>
-            ) : null}
-            <span className="text-2xl font-semibold tabular-nums tracking-tight">
-              {formatUsd(row.monthlyUsd)}
-            </span>
-            <span className="text-xs text-muted-foreground">/mo</span>
-          </div>
+          row.notPriced ? (
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-lg font-semibold tracking-tight text-muted-foreground">
+                Not priced
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-baseline gap-1.5">
+              {row.incomplete ? (
+                <span className="text-xs font-medium text-amber-600">at least</span>
+              ) : null}
+              <span className="text-2xl font-semibold tabular-nums tracking-tight">
+                {formatUsd(row.monthlyUsd)}
+              </span>
+              <span className="text-xs text-muted-foreground">/mo</span>
+            </div>
+          )
         ) : (
           <div className="flex items-center gap-1.5 text-sm font-medium text-destructive">
             <TriangleAlert className="size-4 shrink-0" aria-hidden />
@@ -138,7 +146,14 @@ function ProviderCard({
           {row.regionLabel}
         </div>
 
-        {row.incomplete && row.runnable ? (
+        {row.notPriced && row.runnable ? (
+          <p className="rounded bg-muted px-2 py-1 text-[11px] text-muted-foreground">
+            Not priced — we couldn&rsquo;t verify a single price for this provider, so there is no cost
+            to compare (not $0.00).
+          </p>
+        ) : null}
+
+        {row.incomplete && !row.notPriced && row.runnable ? (
           <p className="rounded bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-400">
             Floor, not a full estimate — a required price couldn&rsquo;t be verified, so real cost is
             higher.
