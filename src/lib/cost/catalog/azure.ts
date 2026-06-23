@@ -151,6 +151,7 @@ export const azureServices: CatalogServiceInput[] = [
             label: 'Requests',
             quantityKey: 'requests',
             unit: 'USD / million requests',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Azure Container Apps Consumption plan requests price per million requests, serviceName "Azure Container Apps", region eastus, type Consumption.',
           },
@@ -234,6 +235,7 @@ export const azureServices: CatalogServiceInput[] = [
             label: 'Executions',
             quantityKey: 'invocations',
             unit: 'USD / million executions',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Azure Functions Consumption plan total executions price per million executions, serviceName "Functions", region eastus, type Consumption (the flat execution charge, not the GB-s charge).',
           },
@@ -391,6 +393,7 @@ export const azureServices: CatalogServiceInput[] = [
             label: 'Request units',
             quantityKey: 'nosqlWrites',
             unit: 'USD / million RUs',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Azure Cosmos DB Serverless price per million request units (RUs) consumed, serviceName "Azure Cosmos DB", region eastus, type Consumption.',
           },
@@ -514,6 +517,7 @@ export const azureServices: CatalogServiceInput[] = [
             label: 'Messaging operations',
             quantityKey: 'queueMessages',
             unit: 'USD / million operations',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Azure Service Bus Standard tier messaging operations price per million operations beyond the included allowance, serviceName "Service Bus", region eastus, type Consumption.',
             required: false,
@@ -560,6 +564,7 @@ export const azureServices: CatalogServiceInput[] = [
             label: 'Ingress events',
             quantityKey: 'queueMessages',
             unit: 'USD / million events',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Azure Event Hubs Standard tier ingress events price per million events, serviceName "Event Hubs", region eastus, type Consumption.',
           },
@@ -605,6 +610,7 @@ export const azureServices: CatalogServiceInput[] = [
             label: 'Write operations',
             quantityKey: 'objectWriteOps',
             unit: 'USD / 10,000 operations',
+            pricePerUnits: 10_000,
             extractionHint:
               'Azure Blob Storage Hot tier write operations (PUT, Create Container, List) price per 10,000 operations for LRS, serviceName "Storage", region eastus, type Consumption.',
           },
@@ -613,6 +619,7 @@ export const azureServices: CatalogServiceInput[] = [
             label: 'Read operations',
             quantityKey: 'objectReadOps',
             unit: 'USD / 10,000 operations',
+            pricePerUnits: 10_000,
             extractionHint:
               'Azure Blob Storage Hot tier read operations (GET and all other) price per 10,000 operations for LRS, serviceName "Storage", region eastus, type Consumption.',
           },
@@ -666,6 +673,7 @@ export const azureServices: CatalogServiceInput[] = [
             label: 'Requests',
             quantityKey: 'cdnRequests',
             unit: 'USD / 10,000 requests',
+            pricePerUnits: 10_000,
             extractionHint:
               'Azure Front Door Standard tier requests price per 10,000 requests for North America and Europe zone, serviceName "Azure Front Door Service", type Consumption.',
           },

@@ -564,6 +564,140 @@ describe('estimateProvider — unsupportedRoles', () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* 🔴 pricePerUnits — bulk scale + per-hour-vs-per-month (BLOCKER-1/2)         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * These are the load-bearing arithmetic tests for the fix. Each builds a mini
+ * SKU whose single dimension carries a scale, prices it, and asserts the total
+ * to the cent. Comment out the `/ dimension.pricePerUnits` term in `engine.ts`
+ * and every assertion here must FAIL — that is the proof the fix bites.
+ *
+ * The four acceptance cases from the task (via POST /api/cost/estimate) reduce
+ * to exactly these five scales: 10³ / 10⁴ / 10⁵ / 10⁶ and the hour→month case.
+ */
+describe('estimateProvider — 🔴 pricePerUnits reconciles the vendor scale', () => {
+  /** Build a one-service, one-SKU, one-dimension catalog with a given scale. */
+  function scaledService(
+    quantityKey: string,
+    pricePerUnits: number,
+    unit: string,
+  ): CatalogService {
+    return catalogServiceSchema.parse({
+      id: 'gcp:scale',
+      provider: 'gcp',
+      role: 'compute-web',
+      name: 'Scale test service',
+      kind: 'serverless',
+      description: 'Fixture service for price-scale arithmetic tests.',
+      pricingUrl: 'https://cloud.google.com/run/pricing',
+      scalingScore: 3,
+      simplicityScore: 3,
+      tradeoff: 'A test-only fixture; never shipped.',
+      skus: [
+        {
+          id: 'gcp:scale:sku',
+          displayName: 'Scale SKU',
+          tier: 'small',
+          dimensions: [
+            {
+              id: 'metered',
+              label: 'Metered dimension',
+              quantityKey,
+              unit,
+              pricePerUnits,
+              extractionHint: 'fixture dimension for scale tests in us-central1',
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  function estimateOne(
+    service: CatalogService,
+    price: PriceRecord,
+    usageOverrides: Partial<UsageProfile>,
+  ) {
+    return estimateProvider({
+      usage: usage(usageOverrides),
+      selection: costSelectionSchema.parse({
+        provider: 'gcp',
+        choices: [{ role: 'compute-web', serviceId: 'gcp:scale', skuId: 'gcp:scale:sku', units: 1 }],
+      }),
+      services: [service],
+      priceRecords: [price],
+      region: 'us-central1',
+    });
+  }
+
+  it('BLOCKER-1 · 10⁶ bulk · GCP Cloud Run 10M requests @ $0.40/million = $4.00 (not $4,000,000)', () => {
+    const svc = scaledService('requests', 1_000_000, 'USD / million requests');
+    const est = estimateOne(svc, rec('gcp:scale:sku', 'metered', 0.4), {
+      monthlyRequests: 10_000_000,
+    });
+    expect(est.monthlyUsd).toBeCloseTo(4.0, 6);
+  });
+
+  it('BLOCKER-1 · 10⁶ bulk · Vercel edge 5M requests @ $2.00/million = $10.00 (not $10,000,000)', () => {
+    const svc = scaledService('cdnRequests', 1_000_000, 'USD / million requests');
+    const est = estimateOne(svc, rec('gcp:scale:sku', 'metered', 2.0), {
+      cdnRequestsPerMonth: 5_000_000,
+    });
+    expect(est.monthlyUsd).toBeCloseTo(10.0, 6);
+  });
+
+  it('BLOCKER-1 · 10⁵ bulk · 5M docs @ $0.03/100,000 = $1.50', () => {
+    const svc = scaledService('nosqlReads', 100_000, 'USD / 100,000 documents');
+    const est = estimateOne(svc, rec('gcp:scale:sku', 'metered', 0.03), {
+      nosqlReadsPerMonth: 5_000_000,
+    });
+    // 5,000,000 / 100,000 × $0.03 = 50 × $0.03 = $1.50
+    expect(est.monthlyUsd).toBeCloseTo(1.5, 6);
+  });
+
+  it('BLOCKER-1 · 10⁴ bulk · GCP Cloud CDN 100,000 lookups @ $0.375/10,000 = $3.75 (not $37,500)', () => {
+    const svc = scaledService('cdnRequests', 10_000, 'USD / 10,000 requests');
+    const est = estimateOne(svc, rec('gcp:scale:sku', 'metered', 0.375), {
+      cdnRequestsPerMonth: 100_000,
+    });
+    expect(est.monthlyUsd).toBeCloseTo(3.75, 6);
+  });
+
+  it('BLOCKER-1 · 10³ bulk · 500,000 ops @ $0.005/1,000 = $2.50 (not $2,500)', () => {
+    const svc = scaledService('objectReadOps', 1_000, 'USD / 1,000 operations');
+    const est = estimateOne(svc, rec('gcp:scale:sku', 'metered', 0.005), {
+      objectReadOpsPerMonth: 500_000,
+    });
+    expect(est.monthlyUsd).toBeCloseTo(2.5, 6);
+  });
+
+  it('BLOCKER-2 · hour→month · GCP Memorystore 4 GiB @ $0.049/GiB-hour = $143.08/mo (not $0.20)', () => {
+    const svc = scaledService('cacheGbMonth', 1 / HOURS_PER_MONTH, 'USD / GiB-hour');
+    const est = estimateOne(svc, rec('gcp:scale:sku', 'metered', 0.049), { cacheGb: 4 });
+    // 4 GiB × 730h × $0.049 = $143.08
+    expect(est.monthlyUsd).toBeCloseTo(4 * HOURS_PER_MONTH * 0.049, 6);
+    expect(est.monthlyUsd).toBeCloseTo(143.08, 2);
+  });
+
+  it('BLOCKER-2 · hour→month · Cloud Storage 500 GiB @ $0.0000274/GiB-hour ≈ $10.00/mo (not $0.01)', () => {
+    const svc = scaledService('objectStorageGbMonth', 1 / HOURS_PER_MONTH, 'USD / GiB-hour');
+    const est = estimateOne(svc, rec('gcp:scale:sku', 'metered', 0.0000274), {
+      objectStorageGb: 500,
+    });
+    expect(est.monthlyUsd).toBeCloseTo(500 * HOURS_PER_MONTH * 0.0000274, 6);
+    expect(est.monthlyUsd).toBeCloseTo(10.0, 1);
+  });
+
+  it('default scale 1 leaves a per-GB egress line unchanged', () => {
+    const svc = scaledService('egressGb', 1, 'USD / GB');
+    const est = estimateOne(svc, rec('gcp:scale:sku', 'metered', 0.09), { originEgressGb: 200 });
+    // 200 GB × $0.09 = $18.00 — no scaling applied.
+    expect(est.monthlyUsd).toBeCloseTo(18.0, 6);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* compare — badges                                                           */
 /* -------------------------------------------------------------------------- */
 

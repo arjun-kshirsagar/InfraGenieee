@@ -310,6 +310,7 @@ export const awsServices: CatalogServiceInput[] = [
             label: 'Invocations',
             quantityKey: 'invocations',
             unit: 'USD / million requests',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Lambda price per 1 million requests for x86 functions in US East (N. Virginia), us-east-1 (the flat request charge, not the duration charge).',
           },
@@ -334,6 +335,7 @@ export const awsServices: CatalogServiceInput[] = [
             label: 'Invocations',
             quantityKey: 'invocations',
             unit: 'USD / million requests',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Lambda price per 1 million requests for x86 functions in US East (N. Virginia), us-east-1 (the flat request charge, not the duration charge).',
           },
@@ -358,6 +360,7 @@ export const awsServices: CatalogServiceInput[] = [
             label: 'Invocations',
             quantityKey: 'invocations',
             unit: 'USD / million requests',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Lambda price per 1 million requests for Arm/Graviton functions in US East (N. Virginia), us-east-1 (the flat request charge).',
           },
@@ -421,6 +424,7 @@ export const awsServices: CatalogServiceInput[] = [
             label: 'CDN HTTPS requests',
             quantityKey: 'cdnRequests',
             unit: 'USD / 10,000 requests',
+            pricePerUnits: 10_000,
             extractionHint:
               'CloudFront pay-as-you-go price per 10,000 HTTPS requests for United States, Mexico, and Canada (after the first 10M free requests).',
           },
@@ -595,6 +599,7 @@ export const awsServices: CatalogServiceInput[] = [
             label: 'Write request units',
             quantityKey: 'nosqlWrites',
             unit: 'USD / million WRU',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'DynamoDB on-demand price per million write request units (WRU) for the Standard table class in US East (N. Virginia), us-east-1.',
           },
@@ -603,6 +608,7 @@ export const awsServices: CatalogServiceInput[] = [
             label: 'Read request units',
             quantityKey: 'nosqlReads',
             unit: 'USD / million RRU',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'DynamoDB on-demand price per million read request units (RRU), eventually-consistent, Standard table class, in US East (N. Virginia), us-east-1.',
           },
@@ -720,6 +726,7 @@ export const awsServices: CatalogServiceInput[] = [
             label: 'Queue requests',
             quantityKey: 'queueMessages',
             unit: 'USD / million requests',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Amazon SQS Standard queue price per 1 million requests in US East (N. Virginia), us-east-1 (the first paid tier after the 1M free requests).',
           },
@@ -835,6 +842,7 @@ export const awsServices: CatalogServiceInput[] = [
             label: 'PUT / COPY / POST requests',
             quantityKey: 'objectWriteOps',
             unit: 'USD / 1,000 requests',
+            pricePerUnits: 1_000,
             extractionHint:
               'S3 Standard price per 1,000 PUT, COPY, POST or LIST requests in US East (N. Virginia), us-east-1.',
           },
@@ -843,6 +851,7 @@ export const awsServices: CatalogServiceInput[] = [
             label: 'GET / SELECT requests',
             quantityKey: 'objectReadOps',
             unit: 'USD / 1,000 requests',
+            pricePerUnits: 1_000,
             extractionHint:
               'S3 Standard price per 1,000 GET, SELECT and all other requests in US East (N. Virginia), us-east-1.',
           },
@@ -889,6 +898,7 @@ export const awsServices: CatalogServiceInput[] = [
             label: 'HTTPS requests',
             quantityKey: 'cdnRequests',
             unit: 'USD / 10,000 requests',
+            pricePerUnits: 10_000,
             extractionHint:
               'CloudFront pay-as-you-go price per 10,000 HTTPS requests for United States, Mexico, and Canada (after the first 10M free requests).',
           },

@@ -28,6 +28,7 @@ import {
   QUANTITY_KEYS,
   CATALOG_VERSION,
   CLOUD_PROVIDERS,
+  HOURS_PER_MONTH,
   type CatalogService,
   type InfraRole,
 } from '@/types/cost';
@@ -347,6 +348,90 @@ describe('service catalog — intentional gaps are honest (§9)', () => {
   it('AWS remains the only provider covering every role', () => {
     for (const role of Object.keys(AWS_COVERAGE) as InfraRole[]) {
       expect(has('aws', role), `aws should fill ${role}`).toBe(true);
+    }
+  });
+});
+
+/**
+ * 🔴 BLOCKER-1/2 regression guard — the machine-readable price SCALE.
+ *
+ * This is the load-bearing test for the fix: the engine multiplies
+ * `billable / pricePerUnits × unitPriceUsd`. If a dimension whose `unit` is
+ * quoted in bulk ("per million", "/ 10,000") or whose `unit` says "hour" while
+ * its `quantityKey` yields a per-MONTH quantity fails to declare a non-default
+ * `pricePerUnits`, the total silently ships wrong by 10³–10⁶× (bulk) or 730×
+ * (hour-vs-month) while carrying a truthful citation. This class of bug MUST NOT
+ * be able to return silently, so we assert the whole assembled catalog here.
+ *
+ * The regexes are intentionally the same "smell" the auditor used to find the
+ * 42 (+3 Cloud SQL) affected dimensions: a bulk denominator, or an hour rate
+ * paired with a *-Month quantity key.
+ */
+describe('service catalog — 🔴 price scale is machine-readable (BLOCKER-1/2)', () => {
+  /** Bulk-price smell: "per million / 10,000 / 1,000 …" or "/ million / N,NNN". */
+  const BULK_UNIT = /per\s*(million|billion|thousand|[\d,]{4,})|\/\s*(million|billion|thousand|[\d,]{4,})/i;
+
+  /** Every (service, sku, dimension) tuple in the assembled catalog. */
+  const allDims = serviceCatalog.services.flatMap((svc) =>
+    svc.skus.flatMap((sku) => sku.dimensions.map((dim) => ({ svc, sku, dim }))),
+  );
+
+  it('every BULK-priced dimension declares pricePerUnits > 1 (not billed per item)', () => {
+    const offenders = allDims
+      .filter(({ dim }) => BULK_UNIT.test(dim.unit))
+      .filter(({ dim }) => !(dim.pricePerUnits > 1));
+    expect(
+      offenders.map((o) => `${o.sku.id} · ${o.dim.id} · "${o.dim.unit}" · scale=${o.dim.pricePerUnits}`),
+      'bulk-priced dimensions must set pricePerUnits to their unit denominator',
+    ).toEqual([]);
+  });
+
+  it('every per-hour rate on a per-month quantity declares pricePerUnits < 1 (billed for all 730h)', () => {
+    const offenders = allDims
+      .filter(({ dim }) => /hour/i.test(dim.unit) && /Month$/.test(dim.quantityKey))
+      .filter(({ dim }) => !(dim.pricePerUnits < 1));
+    expect(
+      offenders.map((o) => `${o.sku.id} · ${o.dim.id} · "${o.dim.unit}" · qk=${o.dim.quantityKey} · scale=${o.dim.pricePerUnits}`),
+      'a per-GiB-hour rate against a *-Month quantity must set pricePerUnits = 1/HOURS_PER_MONTH',
+    ).toEqual([]);
+  });
+
+  it('the per-hour→per-month scale is exactly 1 / HOURS_PER_MONTH', () => {
+    const hourMonth = allDims.filter(
+      ({ dim }) => /hour/i.test(dim.unit) && /Month$/.test(dim.quantityKey),
+    );
+    // There ARE such dimensions (GCP storage/cache/kafka + Cloud SQL storage);
+    // if this ever hits zero the filter or the catalog changed silently.
+    expect(hourMonth.length).toBeGreaterThan(0);
+    for (const { sku, dim } of hourMonth) {
+      expect(dim.pricePerUnits, `${sku.id} · ${dim.id}`).toBeCloseTo(1 / HOURS_PER_MONTH, 12);
+    }
+  });
+
+  it('spot-checks the four acceptance-case scales exactly', () => {
+    const scaleOf = (skuId: string, dimId: string): number | undefined =>
+      allDims.find(({ sku, dim }) => sku.id === skuId && dim.id === dimId)?.dim.pricePerUnits;
+
+    // BLOCKER-1 bulk cases from the task table.
+    expect(scaleOf('gcp:cloud-run:1vcpu-1gib', 'requests')).toBe(1_000_000); // → $4.00
+    expect(scaleOf('vercel:edge-network:standard', 'edge-requests')).toBe(1_000_000); // → $10.00
+    expect(scaleOf('gcp:cloud-cdn:standard', 'cache-lookups')).toBe(10_000); // → $3.75
+    // BLOCKER-2 hour→month case.
+    expect(scaleOf('gcp:memorystore:basic-m1', 'capacity-gib-hour')).toBeCloseTo(
+      1 / HOURS_PER_MONTH,
+      12,
+    ); // → $143.08
+  });
+
+  it('leaves genuinely per-unit dimensions at the default scale of 1', () => {
+    // A per-hour node-hour rate (gbRamHours, instanceHours) is ALREADY per unit —
+    // it must NOT get a 1/730 scale, or memory/compute would be understated.
+    const perHourNode = allDims.filter(
+      ({ dim }) => /hour/i.test(dim.unit) && /Hours$/.test(dim.quantityKey),
+    );
+    expect(perHourNode.length).toBeGreaterThan(0);
+    for (const { sku, dim } of perHourNode) {
+      expect(dim.pricePerUnits, `${sku.id} · ${dim.id} should stay at 1`).toBe(1);
     }
   });
 });

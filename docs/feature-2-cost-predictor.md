@@ -257,9 +257,19 @@ Per dimension, the engine does exactly this and nothing else:
 ```
 quantity = deriveQuantities(usage, sku, choice.units)[dimension.quantityKey]
 billable = max(0, quantity - record.includedQuantity)
-monthly  = billable * record.unitPriceUsd
+monthly  = (billable / dimension.pricePerUnits) * record.unitPriceUsd
 ```
 
+- `dimension.pricePerUnits` (catalog field, default `1`) is how many
+  `quantityKey` units one `unitPriceUsd` buys — the machine-readable price
+  SCALE. It reconciles the vendor's quoted unit with our single-item / per-month
+  quantity vocabulary so the ONE arithmetic site above stays vendor-agnostic:
+  a bulk price (`USD / million requests` → `1_000_000`, `/ 10,000 …` → `10_000`)
+  divides billable down to the priced batch size, and a per-hour rate billed
+  against a per-month quantity (`USD / GiB-hour` on a `*GbMonth` key →
+  `1 / HOURS_PER_MONTH`) is multiplied up across all 730 hours. Leaving it at the
+  default `1` (per-hour node-hours, per-GB egress, per-month plan fees) is a
+  no-op. `catalog.test.ts` fails the build if a bulk/hour dimension omits it.
 - `HOURS_PER_MONTH = 730` (= 365×24/12), the figure every vendor calculator uses.
 - `choice.units` multiplies per-unit quantities. It does **not** multiply
   `months` or `seats` — you do not pay the Vercel Pro plan fee twice for running

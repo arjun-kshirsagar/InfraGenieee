@@ -26,6 +26,8 @@
  * does not sell.
  */
 
+import { HOURS_PER_MONTH } from '@/types/cost';
+
 import type { CatalogServiceInput } from './types';
 
 export const gcpServices: CatalogServiceInput[] = [
@@ -142,6 +144,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Requests',
             quantityKey: 'requests',
             unit: 'USD / million requests',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Cloud Run request-based billing Requests price per 1,000,000 requests, Default tier, based on us-central1 pricing.',
           },
@@ -174,6 +177,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Requests',
             quantityKey: 'requests',
             unit: 'USD / million requests',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Cloud Run request-based billing Requests price per 1,000,000 requests, Default tier, based on us-central1 pricing.',
           },
@@ -206,6 +210,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Requests',
             quantityKey: 'requests',
             unit: 'USD / million requests',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Cloud Run request-based billing Requests price per 1,000,000 requests, Default tier, based on us-central1 pricing.',
           },
@@ -330,6 +335,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Invocations',
             quantityKey: 'invocations',
             unit: 'USD / million requests',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Cloud Run request-based billing Requests price per 1,000,000 requests, Default tier, based on us-central1 pricing.',
           },
@@ -362,6 +368,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Invocations',
             quantityKey: 'invocations',
             unit: 'USD / million requests',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Cloud Run request-based billing Requests price per 1,000,000 requests, Default tier, based on us-central1 pricing.',
           },
@@ -399,6 +406,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Origin storage',
             quantityKey: 'objectStorageGbMonth',
             unit: 'USD / GiB-hour',
+            pricePerUnits: 1 / HOURS_PER_MONTH,
             extractionHint:
               'Cloud Storage Standard storage price per gibibyte-hour for the Iowa (us-central1) region.',
           },
@@ -415,6 +423,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'CDN cache lookup requests',
             quantityKey: 'cdnRequests',
             unit: 'USD / 10,000 requests',
+            pricePerUnits: 10_000,
             extractionHint:
               'Cloud CDN HTTP/HTTPS cache lookup requests price per 10,000 requests (count) — the single flat rate that applies in all Google Cloud regions.',
           },
@@ -468,9 +477,10 @@ export const gcpServices: CatalogServiceInput[] = [
             id: 'storage-gib-month',
             label: 'SSD storage',
             quantityKey: 'dbStorageGbMonth',
-            unit: 'USD / GiB-month',
+            unit: 'USD / GiB-hour',
+            pricePerUnits: 1 / HOURS_PER_MONTH,
             extractionHint:
-              'Cloud SQL SSD storage price per GiB-month for PostgreSQL in Iowa (us-central1).',
+              'Cloud SQL SSD storage capacity price per gibibyte hour for PostgreSQL in Iowa (us-central1) (the page lists storage per gibibyte-hour, not per month).',
           },
         ],
       },
@@ -500,9 +510,10 @@ export const gcpServices: CatalogServiceInput[] = [
             id: 'storage-gib-month',
             label: 'SSD storage',
             quantityKey: 'dbStorageGbMonth',
-            unit: 'USD / GiB-month',
+            unit: 'USD / GiB-hour',
+            pricePerUnits: 1 / HOURS_PER_MONTH,
             extractionHint:
-              'Cloud SQL SSD storage price per GiB-month for PostgreSQL in Iowa (us-central1).',
+              'Cloud SQL SSD storage capacity price per gibibyte hour for PostgreSQL in Iowa (us-central1) (the page lists storage per gibibyte-hour, not per month).',
           },
         ],
       },
@@ -532,9 +543,10 @@ export const gcpServices: CatalogServiceInput[] = [
             id: 'storage-gib-month',
             label: 'SSD storage',
             quantityKey: 'dbStorageGbMonth',
-            unit: 'USD / GiB-month',
+            unit: 'USD / GiB-hour',
+            pricePerUnits: 1 / HOURS_PER_MONTH,
             extractionHint:
-              'Cloud SQL SSD storage price per GiB-month for PostgreSQL in Iowa (us-central1).',
+              'Cloud SQL SSD storage capacity price per gibibyte hour for PostgreSQL in Iowa (us-central1) (the page lists storage per gibibyte-hour, not per month).',
           },
         ],
       },
@@ -572,6 +584,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Document reads',
             quantityKey: 'nosqlReads',
             unit: 'USD / 100,000 documents',
+            pricePerUnits: 100_000,
             extractionHint:
               'Firestore Document Reads price per 100,000 documents (Default) for the Iowa (us-central1) location.',
           },
@@ -580,6 +593,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Document writes',
             quantityKey: 'nosqlWrites',
             unit: 'USD / 100,000 documents',
+            pricePerUnits: 100_000,
             extractionHint:
               'Firestore Document Writes price per 100,000 documents (Default) for the Iowa (us-central1) location.',
           },
@@ -625,6 +639,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Provisioned capacity',
             quantityKey: 'cacheGbMonth',
             unit: 'USD / GiB-hour',
+            pricePerUnits: 1 / HOURS_PER_MONTH,
             extractionHint:
               'Memorystore for Redis Basic Tier, capacity tier M1 (1 to 4 GiB), price per gibibyte hour (Default) in Iowa (us-central1).',
           },
@@ -641,6 +656,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Provisioned capacity',
             quantityKey: 'cacheGbMonth',
             unit: 'USD / GiB-hour',
+            pricePerUnits: 1 / HOURS_PER_MONTH,
             extractionHint:
               'Memorystore for Redis Standard Tier, capacity tier M1 (1 to 4 GiB), price per gibibyte hour (Default) in Iowa (us-central1).',
           },
@@ -657,6 +673,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Provisioned capacity',
             quantityKey: 'cacheGbMonth',
             unit: 'USD / GiB-hour',
+            pricePerUnits: 1 / HOURS_PER_MONTH,
             extractionHint:
               'Memorystore for Redis Standard Tier, capacity tier M2 (5 to 10 GiB), price per gibibyte hour (Default) in Iowa (us-central1).',
           },
@@ -740,6 +757,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Local storage',
             quantityKey: 'kafkaStorageGbMonth',
             unit: 'USD / GiB-hour',
+            pricePerUnits: 1 / HOURS_PER_MONTH,
             extractionHint:
               'Managed Service for Apache Kafka Local Storage price per gibibyte hour, Default, in Iowa (us-central1).',
           },
@@ -764,6 +782,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Local storage',
             quantityKey: 'kafkaStorageGbMonth',
             unit: 'USD / GiB-hour',
+            pricePerUnits: 1 / HOURS_PER_MONTH,
             extractionHint:
               'Managed Service for Apache Kafka Local Storage price per gibibyte hour, Default, in Iowa (us-central1).',
           },
@@ -802,6 +821,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Stored data',
             quantityKey: 'objectStorageGbMonth',
             unit: 'USD / GiB-hour',
+            pricePerUnits: 1 / HOURS_PER_MONTH,
             extractionHint:
               'Cloud Storage Standard storage price per gibibyte-hour for the Iowa (us-central1) region.',
           },
@@ -810,6 +830,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Class A operations (writes)',
             quantityKey: 'objectWriteOps',
             unit: 'USD / 1,000 operations',
+            pricePerUnits: 1_000,
             extractionHint:
               'Cloud Storage Standard storage Class A operations price per 1,000 operations in the Iowa (us-central1) region.',
           },
@@ -818,6 +839,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Class B operations (reads)',
             quantityKey: 'objectReadOps',
             unit: 'USD / 1,000 operations',
+            pricePerUnits: 1_000,
             extractionHint:
               'Cloud Storage Standard storage Class B operations price per 1,000 operations in the Iowa (us-central1) region.',
           },
@@ -863,6 +885,7 @@ export const gcpServices: CatalogServiceInput[] = [
             label: 'Cache lookup requests',
             quantityKey: 'cdnRequests',
             unit: 'USD / 10,000 requests',
+            pricePerUnits: 10_000,
             extractionHint:
               'Cloud CDN HTTP/HTTPS cache lookup requests price per 10,000 requests (count) — the single flat rate that applies in all Google Cloud regions.',
           },

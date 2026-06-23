@@ -484,7 +484,13 @@ upstream fetch beyond the (cached) price books.
    the same price books. Safe to assert byte-equality on in tests (unlike
    Feature 1).
 2. `billableQuantity = max(0, quantity - includedQuantity)`;
-   `monthlyUsd = billableQuantity × unitPriceUsd`. Nothing else.
+   `monthlyUsd = (billableQuantity / dimension.pricePerUnits) × unitPriceUsd`.
+   Nothing else. `pricePerUnits` (catalog dimension field, default `1`) is how
+   many `quantityKey` units one `unitPriceUsd` buys — it makes the vendor's
+   quoted scale machine-readable so a bulk price (`USD / million requests` →
+   `1_000_000`) or a per-hour rate billed against a per-month quantity
+   (`USD / GiB-hour` on a `*GbMonth` key → `1 / HOURS_PER_MONTH`) is reconciled
+   in this ONE arithmetic site with no per-provider special cases.
 3. **`unpriced: true` never means free.** `monthlyUsd` is `0` because we have no
    number, and the UI must say so. A `required` unpriced dimension sets
    `incomplete` on the line and on the provider estimate.

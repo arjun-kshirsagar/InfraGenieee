@@ -21,9 +21,11 @@ import type {
   PriceDimension,
 } from '@/types/cost';
 
-/** A price dimension as authored — `required` may be omitted (defaults true). */
-export type PriceDimensionInput = Omit<PriceDimension, 'required'> & {
+/** A price dimension as authored — `required` and `pricePerUnits` may be
+ *  omitted (they default to `true` and `1` respectively). */
+export type PriceDimensionInput = Omit<PriceDimension, 'required' | 'pricePerUnits'> & {
   required?: boolean;
+  pricePerUnits?: number;
 };
 
 /** A SKU as authored — `specs` and `defaultUnits` may be omitted. */

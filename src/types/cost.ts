@@ -310,6 +310,37 @@ export const priceDimensionSchema = z.object({
   /** Display-only, e.g. `USD / hour`, `USD / GB-month`. */
   unit: z.string().min(1).max(40),
   /**
+   * 🔴 The machine-readable price SCALE — how many `quantityKey` units one
+   * `unitPriceUsd` buys. This is the ONE fact `unit` (a display string) cannot
+   * carry, and its absence was BLOCKER-1/2: totals wrong by 10³–10⁶× (bulk
+   * units) and 730× (per-hour rates billed against per-month quantities).
+   *
+   * The engine does exactly (`engine.ts`):
+   *
+   *     monthlyUsd = (billable / pricePerUnits) * unitPriceUsd
+   *
+   * so this field, and nothing per-provider, reconciles the vendor's quoted
+   * unit with our single-item / per-month quantity vocabulary:
+   *
+   *   • BULK unit — the price is quoted per N items but `deriveQuantities`
+   *     emits single items. `USD / million requests` → `pricePerUnits: 1_000_000`
+   *     (`USD / 10,000 operations` → `10_000`, `/ 100,000 documents` → `100_000`).
+   *     `10_000_000 requests ÷ 1_000_000 × $0.40 = $4.00`, not `$4,000,000`.
+   *
+   *   • PER-HOUR rate vs PER-MONTH quantity — the price is per unit-HOUR
+   *     (`USD / GiB-hour`) but the `quantityKey` yields a unit-MONTH figure
+   *     (`objectStorageGbMonth`, `cacheGbMonth`, `dbStorageGbMonth`, …). Set
+   *     `pricePerUnits: 1 / HOURS_PER_MONTH` so the monthly quantity is billed
+   *     for all 730 hours: `500 GiB ÷ (1/730) × $0.0000274 = $10.00`, not `$0.01`.
+   *
+   * Default 1 = the price is already per single quantity-unit (per-hour node
+   * hours, per-GB egress, per-month plan fees). The `catalog.test.ts` regression
+   * guard FAILS if any dimension whose `unit` looks bulk (`per million`, `/ N,NNN`)
+   * or whose `unit` says `hour` while its `quantityKey` ends in `Month` leaves
+   * this at the default — this class of bug must not be able to return silently.
+   */
+  pricePerUnits: z.number().positive().default(1),
+  /**
    * When true, a missing price makes the whole SKU unpriceable and the UI must
    * say so rather than silently under-reporting. Optional dimensions (a request
    * charge on top of an hourly node, say) may be absent.

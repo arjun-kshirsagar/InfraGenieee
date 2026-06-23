@@ -254,3 +254,137 @@ describe('POST /api/cost/estimate', () => {
     expect(raw).not.toContain('ANTHROPIC_API_KEY');
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* 🔴 BLOCKER-1/2 acceptance — the four hand-computed cases via the route      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * These are the task's four acceptance cases, exercised end-to-end through
+ * POST /api/cost/estimate against the REAL catalog and REAL pure engine (only
+ * the price fetch is mocked, so the suite bills nothing). They assert the exact
+ * dollar totals the task requires: $4.00, $10.00, $3.75, $143.08.
+ *
+ * Each prices ONLY the target dimension and zeroes the usage that would drive
+ * the SKU's other dimensions, so the provider total IS the target line — the
+ * cleanest possible assertion that `pricePerUnits` reached the response.
+ */
+describe('POST /api/cost/estimate — 🔴 BLOCKER-1/2 acceptance cases', () => {
+  /** A usage profile with every metered driver at 0 except the overrides. */
+  function zeroUsage(overrides: Record<string, number>) {
+    return { ...usage, computeHoursPerNode: 0, monthlyRequests: 0, ...overrides };
+  }
+
+  function bookFor(
+    provider: CloudProvider,
+    region: string,
+    skuId: string,
+    dimensionId: string,
+    unitPriceUsd: number,
+    url: string,
+  ): PriceBook {
+    return {
+      provider,
+      region,
+      pipelineVersion: PRICING_PIPELINE_VERSION,
+      generatedAt: '2026-07-26T10:00:00.000Z',
+      records: [
+        {
+          skuId,
+          dimensionId,
+          unitPriceUsd,
+          includedQuantity: 0,
+          currency: 'USD',
+          source: {
+            url,
+            fetchedAt: '2026-07-26T09:59:00.000Z',
+            evidence: `${dimensionId} ${unitPriceUsd}`,
+            extractorModel: 'test',
+          },
+        },
+      ],
+      gaps: [],
+    };
+  }
+
+  async function estimateTotal(body: unknown, book: PriceBook, provider: CloudProvider) {
+    mockBuild.mockImplementation(async (p: CloudProvider) => {
+      if (p === provider) return book;
+      throw new PricingError('unavailable', 'not requested', { provider: p });
+    });
+    const res = await POST(jsonRequest(body));
+    expect(res.status).toBe(200);
+    const parsed = await res.json();
+    expect(estimateResponseSchema.safeParse(parsed).success).toBe(true);
+    return parsed.comparison.estimates[0].monthlyUsd as number;
+  }
+
+  it('BLOCKER-1 · GCP Cloud Run 10M requests → $4.00 (bulk 10⁶, not $4,000,000)', async () => {
+    const body = {
+      usage: zeroUsage({ monthlyRequests: 10_000_000 }),
+      selections: [
+        {
+          provider: 'gcp',
+          choices: [
+            { role: 'compute-web', serviceId: 'gcp:cloud-run', skuId: 'gcp:cloud-run:1vcpu-1gib', units: 1, enabled: true },
+          ],
+        },
+      ],
+      requiredRoles: ['compute-web'],
+    };
+    const book = bookFor('gcp', PRICED_REGION.gcp, 'gcp:cloud-run:1vcpu-1gib', 'requests', 0.4, 'https://cloud.google.com/run/pricing');
+    expect(await estimateTotal(body, book, 'gcp')).toBeCloseTo(4.0, 6);
+  });
+
+  it('BLOCKER-1 · Vercel edge 5M requests → $10.00 (bulk 10⁶, not $10,000,000)', async () => {
+    const body = {
+      usage: zeroUsage({ cdnRequestsPerMonth: 5_000_000, cdnEgressGb: 0 }),
+      selections: [
+        {
+          provider: 'vercel',
+          choices: [
+            { role: 'cdn', serviceId: 'vercel:edge-network', skuId: 'vercel:edge-network:standard', units: 1, enabled: true },
+          ],
+        },
+      ],
+      requiredRoles: ['cdn'],
+    };
+    const book = bookFor('vercel', PRICED_REGION.vercel, 'vercel:edge-network:standard', 'edge-requests', 2.0, 'https://vercel.com/pricing');
+    expect(await estimateTotal(body, book, 'vercel')).toBeCloseTo(10.0, 6);
+  });
+
+  it('BLOCKER-1 · GCP Cloud CDN 100,000 lookups @ $0.375/10,000 → $3.75 (bulk 10⁴, not $37,500)', async () => {
+    const body = {
+      usage: zeroUsage({ cdnRequestsPerMonth: 100_000, cdnEgressGb: 0 }),
+      selections: [
+        {
+          provider: 'gcp',
+          choices: [
+            { role: 'cdn', serviceId: 'gcp:cloud-cdn', skuId: 'gcp:cloud-cdn:standard', units: 1, enabled: true },
+          ],
+        },
+      ],
+      requiredRoles: ['cdn'],
+    };
+    const book = bookFor('gcp', PRICED_REGION.gcp, 'gcp:cloud-cdn:standard', 'cache-lookups', 0.375, 'https://cloud.google.com/cdn/pricing');
+    expect(await estimateTotal(body, book, 'gcp')).toBeCloseTo(3.75, 6);
+  });
+
+  it('BLOCKER-2 · GCP Memorystore 4 GiB @ $0.049/GiB-hour → $143.08 (hour→month, not $0.20)', async () => {
+    const body = {
+      usage: zeroUsage({ cacheGb: 4 }),
+      selections: [
+        {
+          provider: 'gcp',
+          choices: [
+            { role: 'cache-redis', serviceId: 'gcp:memorystore', skuId: 'gcp:memorystore:basic-m1', units: 1, enabled: true },
+          ],
+        },
+      ],
+      requiredRoles: ['cache-redis'],
+    };
+    const book = bookFor('gcp', PRICED_REGION.gcp, 'gcp:memorystore:basic-m1', 'capacity-gib-hour', 0.049, 'https://cloud.google.com/memorystore/docs/redis/pricing');
+    // 4 GiB × 730h × $0.049 = $143.08
+    expect(await estimateTotal(body, book, 'gcp')).toBeCloseTo(143.08, 2);
+  });
+});

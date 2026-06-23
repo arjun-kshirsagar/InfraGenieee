@@ -102,6 +102,7 @@ export const vercelServices: CatalogServiceInput[] = [
             label: 'Function invocations',
             quantityKey: 'invocations',
             unit: 'USD / million invocations',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Vercel Function Invocations price per 1M invocations from vercel.com/docs/pricing, the on-demand rate after the included allowance, applies in all regions.',
             required: false,
@@ -141,6 +142,7 @@ export const vercelServices: CatalogServiceInput[] = [
             label: 'Invocations',
             quantityKey: 'invocations',
             unit: 'USD / million invocations',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Vercel Function Invocations price per 1M invocations from vercel.com/docs/pricing, the on-demand rate after the included allowance, applies in all regions.',
           },
@@ -195,6 +197,7 @@ export const vercelServices: CatalogServiceInput[] = [
             label: 'Edge Requests',
             quantityKey: 'cdnRequests',
             unit: 'USD / million requests',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Vercel Edge Requests on-demand price per 1M requests from vercel.com/docs/pricing/networking, after the included allowance, applies in all regions.',
           },
@@ -241,6 +244,7 @@ export const vercelServices: CatalogServiceInput[] = [
             label: 'Advanced operations (writes)',
             quantityKey: 'objectWriteOps',
             unit: 'USD / million operations',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Vercel Blob Advanced Operations price per million operations (put, copy, list) from vercel.com/docs/vercel-blob/usage-and-pricing, after the included allowance, applies in all regions.',
           },
@@ -249,6 +253,7 @@ export const vercelServices: CatalogServiceInput[] = [
             label: 'Simple operations (reads)',
             quantityKey: 'objectReadOps',
             unit: 'USD / million operations',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Vercel Blob Simple Operations price per million operations (cache-miss URL access, head) from vercel.com/docs/vercel-blob/usage-and-pricing, after the included allowance, applies in all regions.',
             required: false,
@@ -305,6 +310,7 @@ export const vercelServices: CatalogServiceInput[] = [
             label: 'Edge Requests',
             quantityKey: 'cdnRequests',
             unit: 'USD / million requests',
+            pricePerUnits: 1_000_000,
             extractionHint:
               'Vercel Edge Requests on-demand price per 1M requests from vercel.com/docs/pricing/networking, after the included allowance, applies in all regions.',
           },

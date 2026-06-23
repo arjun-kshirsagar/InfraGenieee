@@ -9,7 +9,13 @@
  *
  *     quantity = deriveQuantities(usage, sku, choice.units)[dimension.quantityKey]
  *     billable = max(0, quantity - record.includedQuantity)
- *     monthly  = billable * record.unitPriceUsd
+ *     monthly  = (billable / dimension.pricePerUnits) * record.unitPriceUsd
+ *
+ * `pricePerUnits` (dimension-level, default 1) is how many quantityKey units one
+ * `unitPriceUsd` buys — it makes the vendor's quoted scale machine-readable so a
+ * bulk price ("USD / million requests") or a per-hour rate billed against a
+ * per-month quantity ("USD / GiB-hour" vs a GbMonth key) is reconciled HERE, in
+ * the one arithmetic site, with no per-provider special cases.
  *
  * and then decorates the result with the honesty affordances the whole feature
  * exists to guarantee:
@@ -146,8 +152,19 @@ function priceDimension(
   }
 
   // §7 arithmetic — exactly this, nothing else.
+  //
+  // 🔴 `pricePerUnits` (dimension-level, default 1) is how many quantityKey
+  // units one `unitPriceUsd` buys — the fix for BLOCKER-1/2. Dividing billable
+  // by it reconciles the vendor's quoted scale with our single-item / per-month
+  // quantity vocabulary in ONE place, with NO per-provider special cases:
+  //   • bulk unit ("USD / million requests" → pricePerUnits 1_000_000):
+  //       10_000_000 req / 1_000_000 × $0.40 = $4.00   (not $4,000,000)
+  //   • per-hour rate vs per-month quantity ("USD / GiB-hour", GbMonth key →
+  //     pricePerUnits 1/730): 500 GiB / (1/730) × $0.0000274 = $10.00 (not $0.01)
+  // Default 1 leaves already-per-unit prices (per-hour nodes, per-GB egress,
+  // per-month plan fees) unchanged.
   const billableQuantity = Math.max(0, quantity - record.includedQuantity);
-  const monthlyUsd = billableQuantity * record.unitPriceUsd;
+  const monthlyUsd = (billableQuantity / dimension.pricePerUnits) * record.unitPriceUsd;
 
   return {
     result: {
