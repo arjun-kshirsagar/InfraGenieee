@@ -56,7 +56,7 @@ function totalCell(e: ProviderEstimate): string {
   // state. "≥ $0.00/mo" is not meaningful (BLOCKER-3 / MINOR-1); say "not
   // priced" with no dollar figure.
   if (isEntirelyUnpriced(e)) {
-    return '**not priced** *(no verified price \u2014 not $0.00)*';
+    return '**not priced** *(no verified price \u2014 a gap, not a zero)*';
   }
   return `${e.incomplete ? '\u2265 ' : ''}${formatUsd(e.monthlyUsd)}/mo${
     e.incomplete ? ' *(floor \u2014 an unpriced required line)*' : ''

@@ -187,6 +187,46 @@ describe('price records are always cited', () => {
     ).toBe(true);
   });
 
+  it('accepts a serialised feed record as evidence (a real Azure Retail item is ~750-900 chars) — BLOCKER-3', () => {
+    // The evidence cap must be at least as large as a serialised price-feed
+    // record; docs §5 defines feed evidence AS the serialised matched record.
+    // A 600-char cap silently voided Azure's whole book (BLOCKER-3).
+    const feedEvidence = `{ "retailPrice" : 8 , ${'x'.repeat(850)} }`;
+    expect(feedEvidence.length).toBeGreaterThan(600);
+    expect(feedEvidence.length).toBeLessThanOrEqual(2000);
+    expect(
+      priceRecordSchema.safeParse({
+        skuId: 'azure:postgres-flex:memory-64',
+        dimensionId: 'vcore-hour',
+        unitPriceUsd: 8,
+        source: { ...source, evidence: feedEvidence },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('still rejects an evidence string beyond the (2000) cap — the field stays bounded', () => {
+    expect(
+      priceRecordSchema.safeParse({
+        skuId: 'azure:postgres-flex:memory-64',
+        dimensionId: 'vcore-hour',
+        unitPriceUsd: 8,
+        source: { ...source, evidence: 'x'.repeat(2001) },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts the new invalid_record gap reason', () => {
+    const parsed = priceBookSchema.parse({
+      provider: 'azure',
+      region: 'eastus',
+      pipelineVersion: '1.0.0',
+      generatedAt: '2026-07-26T10:00:00.000Z',
+      records: [],
+      gaps: [{ skuId: 'azure:postgres-flex:memory-64', dimensionId: 'vcore-hour', reason: 'invalid_record' }],
+    });
+    expect(parsed.gaps[0].reason).toBe('invalid_record');
+  });
+
   it('rejects two prices for the same SKU dimension', () => {
     const record = {
       skuId: 'aws:rds-postgres:small',

@@ -337,6 +337,80 @@ describe('buildPriceBook — feed path (aws / azure)', () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* 🔴 RC2 (BLOCKER-3): one invalid record must NOT take the whole book down    */
+/* -------------------------------------------------------------------------- */
+
+describe('buildPriceBook — 🔴 a single invalid record becomes a gap; the rest of the book survives', () => {
+  it('an over-long evidence string on ONE record → invalid_record gap, the OTHER records still price (Azure BLOCKER-3)', async () => {
+    // This is the exact shape of BLOCKER-3: a feed produced several real,
+    // evidence-backed prices, but one record's serialised evidence exceeded the
+    // schema cap. Before RC2 that failed `priceBookSchema.safeParse` and dropped
+    // the ENTIRE provider's book. Now the bad record becomes an `invalid_record`
+    // gap and the good ones survive.
+    const azureQueries: { skuId: string; dimensionId: string }[] = [];
+
+    // An evidence string that PASSES the evidence gate (it is the page and it
+    // contains the price) but EXCEEDS priceSourceSchema's 2000-char cap.
+    const overLongEvidence = `retailPrice 8 ${'x'.repeat(2100)}`;
+    expect(overLongEvidence.length).toBeGreaterThan(2000);
+
+    const deps = makeDeps({
+      azureRetail: vi.fn(async (queries: { skuId: string; dimensionId: string }[]): Promise<FeedResult[]> => {
+        azureQueries.push(...queries);
+        return queries.map((q, i) => {
+          // The FIRST query gets the over-long evidence (the poison record);
+          // every other query gets a normal, valid short evidence.
+          const evidence = i === 0 ? overLongEvidence : `retailPrice 8`;
+          return {
+            kind: 'record' as const,
+            candidate: {
+              skuId: q.skuId,
+              dimensionId: q.dimensionId,
+              unitPriceUsd: 8,
+              includedQuantity: 0,
+              evidence,
+              feedUrl: 'https://prices.azure.com/api/retail/prices',
+              fetchedAt: '2026-07-26T00:00:00.000Z',
+            },
+          };
+        });
+      }),
+    });
+
+    const book = await makeBuildPriceBook(deps)('azure', { force: true });
+
+    // 🔴 The book is RETURNED and schema-valid — one bad record did not sink it.
+    expect(priceBookSchema.safeParse(book).success).toBe(true);
+    expect(book.provider).toBe('azure');
+
+    // Azure had more than one descriptor-wired dimension, so we exercised >1 query.
+    expect(azureQueries.length).toBeGreaterThan(1);
+
+    // The poison record is a gap with the new reason; NOT a record.
+    const poison = azureQueries[0];
+    const poisonRecord = book.records.find(
+      (r) => r.skuId === poison.skuId && r.dimensionId === poison.dimensionId,
+    );
+    expect(poisonRecord).toBeUndefined();
+    const poisonGap = book.gaps.find(
+      (g) => g.skuId === poison.skuId && g.dimensionId === poison.dimensionId,
+    );
+    expect(poisonGap?.reason).toBe('invalid_record');
+
+    // Every OTHER Azure feed dimension still priced — the good records survived.
+    const survivors = azureQueries.slice(1);
+    expect(survivors.length).toBeGreaterThan(0);
+    for (const q of survivors) {
+      const rec = book.records.find((r) => r.skuId === q.skuId && r.dimensionId === q.dimensionId);
+      expect(rec, `${q.skuId}|${q.dimensionId} should have survived`).toBeDefined();
+      expect(rec?.unitPriceUsd).toBe(8);
+    }
+    // And the book carries real records, not just gaps.
+    expect(book.records.length).toBeGreaterThan(0);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* Cache behaviour                                                            */
 /* -------------------------------------------------------------------------- */
 

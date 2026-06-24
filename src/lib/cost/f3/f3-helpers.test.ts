@@ -119,6 +119,31 @@ function estimate(overrides: Partial<ProviderEstimate> & { provider: ProviderEst
   };
 }
 
+/** An estimate with line items but ZERO priced dimensions — services selected,
+ *  every price a gap (the Azure BLOCKER-3 shape). Its monthlyUsd is a $0 floor
+ *  of pure unknowns, not a comparable cost. */
+function notPricedEstimate(
+  provider: ProviderEstimate['provider'],
+): ProviderEstimate {
+  return {
+    provider,
+    region: 'eastus',
+    items: [
+      line({
+        role: 'compute-web',
+        dimensions: [unpricedDim()],
+        monthlyUsd: 0,
+        incomplete: true,
+      }),
+    ],
+    monthlyUsd: 0,
+    unsupportedRoles: [],
+    incomplete: true,
+    oldestPriceAt: null,
+    warnings: [],
+  };
+}
+
 function comparison(overrides: Partial<CostComparison> = {}): CostComparison {
   return {
     generatedAt: GENERATED_AT,
@@ -197,6 +222,32 @@ describe('buildComparisonRows', () => {
     const rows = buildComparisonRows([a, b, c], comparison({ estimates: [a, b, c] }));
     expect(rows.map((r) => r.provider)).toEqual(['gcp', 'digitalocean', 'aws']);
   });
+
+  it('🔴 sorts an entirely-unpriced ($0 floor of unknowns) provider AFTER real estimates (RC4)', () => {
+    // Azure BLOCKER-3: services selected, every dimension unpriced → monthlyUsd
+    // 0. Sorting purely by amount would put this $0 FIRST, ahead of a real $40
+    // estimate. It must sort LAST among runnable providers instead.
+    const azure = notPricedEstimate('azure');
+    const aws = estimate({ provider: 'aws', monthlyUsd: 40 });
+    const gcpFloor = estimate({ provider: 'gcp', monthlyUsd: 10, incomplete: true });
+    const rows = buildComparisonRows(
+      [azure, aws, gcpFloor],
+      comparison({ estimates: [azure, aws, gcpFloor] }),
+    );
+    // complete real (aws) → incomplete floor (gcp) → not-priced (azure), never $0-first.
+    expect(rows.map((r) => r.provider)).toEqual(['aws', 'gcp', 'azure']);
+    expect(rows[2].notPriced).toBe(true);
+    expect(rows[0].notPriced).toBe(false);
+  });
+
+  it('flags an entirely-unpriced estimate as notPriced, and a real one as not', () => {
+    const azure = notPricedEstimate('azure');
+    const aws = estimate({ provider: 'aws', monthlyUsd: 40 });
+    const rows = buildComparisonRows([aws, azure], comparison({ estimates: [aws, azure] }));
+    const byProvider = Object.fromEntries(rows.map((r) => [r.provider, r.notPriced]));
+    expect(byProvider.azure).toBe(true);
+    expect(byProvider.aws).toBe(false);
+  });
 });
 
 /* -------------------------------------------------------------------------- */
@@ -268,6 +319,23 @@ describe('toProviderBars', () => {
     const bars = toProviderBars([estimate({ provider: 'aws', monthlyUsd: 0, items: [] })]);
     expect(bars[0].state).toBe('priced');
     expect(bars[0].monthlyUsd).toBe(0);
+  });
+
+  it('🔴 an entirely-unpriced provider is state "notpriced", NOT a $0 "priced" bar (BLOCKER-3)', () => {
+    // Services selected but every dimension unpriced → we could not price it at
+    // all. It must read as "couldn't price", never a confident (zero-height) bar.
+    const bars = toProviderBars([notPricedEstimate('azure')]);
+    expect(bars[0].state).toBe('notpriced');
+    expect(bars[0].monthlyUsd).toBe(0);
+  });
+
+  it('distinguishes "priced at zero" from "couldn\'t price" on the same chart', () => {
+    const bars = toProviderBars([
+      estimate({ provider: 'aws', monthlyUsd: 0, items: [] }), // earned $0 → priced
+      notPricedEstimate('azure'), // couldn't price → notpriced
+    ]);
+    expect(bars[0].state).toBe('priced');
+    expect(bars[1].state).toBe('notpriced');
   });
 });
 
@@ -437,6 +505,22 @@ describe('buildComparisonMarkdown', () => {
     });
     expect(md.toLowerCase()).toContain('cannot run this app');
     expect(md).toContain('Relational database');
+  });
+
+  it('🔴 renders "not priced" (never $0.00) for an entirely-unpriced provider (MINOR-1)', () => {
+    const e = notPricedEstimate('azure');
+    const md = buildComparisonMarkdown({
+      title: 'X',
+      comparison: comparison({ estimates: [e] }),
+      tradeoffs: [],
+      now: NOW,
+    });
+    expect(md.toLowerCase()).toContain('not priced');
+    // The Azure summary row must NOT state a $0.00/mo figure.
+    const summaryLine = md.split('\n').find((l) => l.includes('Microsoft Azure') && l.includes('|'));
+    expect(summaryLine).toBeDefined();
+    expect(summaryLine).not.toContain('$0.00');
+    expect(summaryLine).not.toContain('\u2265 $0.00');
   });
 
   it('renders no-winner copy when all badge awards are null', () => {

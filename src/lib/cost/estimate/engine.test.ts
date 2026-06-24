@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { compare, estimateProvider } from '@/lib/cost/estimate/engine';
+import { compare, estimateProvider, hasAnyPricedDimension, isEntirelyUnpriced } from '@/lib/cost/estimate/engine';
 import {
   HOURS_PER_MONTH,
   catalogServiceSchema,
@@ -838,8 +838,123 @@ describe('compare — badges', () => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* Purity                                                                     */
+/* 🔴 RC3 (BLOCKER-3): a provider that priced NOTHING wins no price-adjacent    */
+/* badge, and the priced-detection helpers behave correctly.                   */
 /* -------------------------------------------------------------------------- */
+
+describe('compare — 🔴 badges exclude an entirely-unpriced provider (RC3)', () => {
+  // AWS with NO price records at all: services selected, every dimension
+  // unpriced → monthlyUsd 0, a $0 floor of pure unknowns (the Azure BLOCKER-3
+  // shape). Its editorial score is the HIGHEST (ec2+rds+egress), so WITHOUT the
+  // completeness filter it would wrongly win bestScaling.
+  function unpricedAws() {
+    return estimateProvider({
+      usage: usage(),
+      selection: awsSelection(),
+      services: ALL_SERVICES,
+      priceRecords: [], // 🔴 nothing priced
+      region: 'us-east-1',
+      requiredRoles: ['compute-web', 'db-relational', 'egress'],
+    });
+  }
+
+  it('an unpriced provider (0 priced dimensions) never wins bestScaling or simplest', () => {
+    const azureLike = unpricedAws();
+    // Sanity: it really priced nothing, and it is incomplete.
+    expect(hasAnyPricedDimension(azureLike)).toBe(false);
+    expect(isEntirelyUnpriced(azureLike)).toBe(true);
+    expect(azureLike.monthlyUsd).toBe(0);
+
+    const cmp = compare({
+      estimates: [azureLike, vercelEstimate()],
+      services: ALL_SERVICES,
+      generatedAt: GENERATED_AT,
+    });
+
+    // Vercel is the only provider that priced something → it wins both badges,
+    // even though the unpriced AWS-shaped provider has a higher scaling score.
+    expect(cmp.bestScaling).toBe('vercel');
+    expect(cmp.simplest).toBe('vercel');
+    // And it is not the cheapest either (cheapest already filtered it).
+    expect(cmp.cheapest).toBe('vercel');
+  });
+
+  it('every badge is null when NO provider priced anything', () => {
+    const cmp = compare({
+      estimates: [unpricedAws(), unpricedAws()],
+      services: ALL_SERVICES,
+      generatedAt: GENERATED_AT,
+    });
+    expect(cmp.bestScaling).toBeNull();
+    expect(cmp.simplest).toBeNull();
+    expect(cmp.cheapest).toBeNull();
+  });
+
+  it('a merely-incomplete provider (some priced, one required line unpriced) can STILL win a badge', () => {
+    // AWS missing ONLY the instance-hour price: incomplete, but it DID price
+    // rds + egress, so it has priced dimensions and its editorial score is
+    // honestly earned. It must remain eligible for the badges.
+    const incompleteAws = estimateProvider({
+      usage: usage(),
+      selection: awsSelection(),
+      services: ALL_SERVICES,
+      priceRecords: AWS_PRICES.filter((r) => r.dimensionId !== 'instance-hour'),
+      region: 'us-east-1',
+      requiredRoles: ['compute-web', 'db-relational', 'egress'],
+    });
+    expect(incompleteAws.incomplete).toBe(true);
+    expect(hasAnyPricedDimension(incompleteAws)).toBe(true);
+    expect(isEntirelyUnpriced(incompleteAws)).toBe(false);
+
+    const cmp = compare({
+      estimates: [incompleteAws, vercelEstimate()],
+      services: ALL_SERVICES,
+      generatedAt: GENERATED_AT,
+    });
+    // scaling: AWS 11 > Vercel 10 → AWS still wins bestScaling despite being a floor.
+    expect(cmp.bestScaling).toBe('aws');
+  });
+});
+
+describe('hasAnyPricedDimension / isEntirelyUnpriced', () => {
+  it('a fully-priced estimate has priced dimensions and is not entirely-unpriced', () => {
+    const est = awsEstimate();
+    expect(hasAnyPricedDimension(est)).toBe(true);
+    expect(isEntirelyUnpriced(est)).toBe(false);
+  });
+
+  it('an estimate with items but zero priced dimensions is entirely-unpriced', () => {
+    const est = estimateProvider({
+      usage: usage(),
+      selection: awsSelection(),
+      services: ALL_SERVICES,
+      priceRecords: [],
+      region: 'us-east-1',
+      requiredRoles: ['compute-web', 'db-relational', 'egress'],
+    });
+    expect(est.items.length).toBeGreaterThan(0);
+    expect(hasAnyPricedDimension(est)).toBe(false);
+    expect(isEntirelyUnpriced(est)).toBe(true);
+  });
+
+  it('a genuine $0 priced dimension (free tier) is "priced at zero", NOT entirely-unpriced', () => {
+    // Give AWS a price book where every used dimension is a real record but the
+    // instance is priced at $0 (a free-tier line the provider EARNED). It has
+    // priced dimensions, so it must not be treated as "couldn't price".
+    const freeAws = estimateProvider({
+      usage: usage(),
+      selection: awsSelection(),
+      services: ALL_SERVICES,
+      priceRecords: AWS_PRICES.map((r) => ({ ...r, unitPriceUsd: 0 })),
+      region: 'us-east-1',
+      requiredRoles: ['compute-web', 'db-relational', 'egress'],
+    });
+    expect(freeAws.monthlyUsd).toBe(0);
+    expect(hasAnyPricedDimension(freeAws)).toBe(true);
+    expect(isEntirelyUnpriced(freeAws)).toBe(false); // it earned the zero
+  });
+});
+
 
 describe('cost engine — purity / determinism', () => {
   it('estimateProvider returns identical output across two calls', () => {
