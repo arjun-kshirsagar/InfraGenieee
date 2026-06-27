@@ -319,20 +319,32 @@ describe('buildPriceBook — feed path (aws / azure)', () => {
     expect(ec2?.source.extractorModel).toContain('feed');
   });
 
-  it('a dimension with no wired feed descriptor becomes an honest not_found gap (never fabricated)', async () => {
-    // Use the real feed adapters returning nothing so undescribed dims fall
-    // through to the not_found path. Simplest: stub feeds to echo gaps only for
-    // what they are asked, and confirm undescribed dims are gaps regardless.
+  it('a dimension the feed cannot price becomes an honest gap (never a fabricated number)', async () => {
+    // AWS is now fully descriptor-wired (MAJOR-2), so the "no descriptor" branch
+    // is exercised elsewhere (the pure descriptor test). Here we prove the OTHER
+    // honest-gap guarantee: when a feed adapter cannot resolve a query it returns
+    // a gap, and buildViaFeeds folds it in as a gap — never a fabricated record.
     const deps = makeDeps({
-      ec2Metered: vi.fn(async () => []),
-      awsPriceList: vi.fn(async () => []),
+      ec2Metered: vi.fn(async (queries: Ec2MeteredQuery[]): Promise<FeedResult[]> =>
+        queries.map((q) => ({
+          kind: 'gap' as const,
+          gap: { skuId: q.skuId, dimensionId: q.dimensionId, reason: 'not_found_on_page' as const },
+        })),
+      ),
+      awsPriceList: vi.fn(async (queries: AwsPriceListQuery[]): Promise<FeedResult[]> =>
+        queries.map((q) => ({
+          kind: 'gap' as const,
+          gap: { skuId: q.skuId, dimensionId: q.dimensionId, reason: 'not_found_on_page' as const },
+        })),
+      ),
     });
     const book = await makeBuildPriceBook(deps)('aws', { force: true });
     expect(priceBookSchema.safeParse(book).success).toBe(true);
-    // e.g. RDS storage has no descriptor wired yet → must be a gap, not a record.
+    // Every dimension the feed refused is a gap, and NO record was fabricated.
+    expect(book.records).toHaveLength(0);
+    expect(book.gaps.length).toBeGreaterThan(0);
     const rds = book.gaps.find((g) => g.skuId.startsWith('aws:rds-postgres:'));
     expect(rds).toBeDefined();
-    expect(book.records.every((r) => r.unitPriceUsd >= 0)).toBe(true);
   });
 });
 

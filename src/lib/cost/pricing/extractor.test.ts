@@ -59,6 +59,7 @@ describe('extractPrices — one call per page, faithful passthrough', () => {
         dimensionId: 'droplet-hour',
         unitPriceUsd: 0.00893,
         includedQuantity: 0, // defaulted when the model omits it
+        includedQuantityEvidence: '', // defaulted when the model omits it
         evidence: '$0.00893',
       },
     ]);

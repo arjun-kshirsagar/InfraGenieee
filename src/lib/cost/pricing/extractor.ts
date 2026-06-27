@@ -55,8 +55,11 @@ export interface ExtractedCandidate {
   skuId: string;
   dimensionId: string;
   unitPriceUsd: number;
-  /** Free allowance the page states, in the same unit. 0 when none stated. */
+  /** Free allowance the page states, in the DIMENSION's unit. 0 when none. */
   includedQuantity: number;
+  /** Verbatim page excerpt proving the allowance number AND its unit. Empty/
+   *  absent when no allowance is claimed. Gated by `assertAllowanceInDimensionUnit`. */
+  includedQuantityEvidence?: string;
   /** The model's claimed verbatim excerpt. The gate proves this downstream. */
   evidence: string;
 }
@@ -73,6 +76,9 @@ const extractedCandidateSchema = z.object({
   unitPriceUsd: z.number(),
   /** Optional — omitted unless the page states a free allowance. */
   includedQuantity: z.number().min(0).optional(),
+  /** Verbatim excerpt proving the allowance number AND its unit. Required
+   *  whenever includedQuantity is present so the allowance gate can prove it. */
+  includedQuantityEvidence: z.string().max(600).optional(),
   evidence: z.string().min(1).max(600),
 });
 
@@ -111,8 +117,20 @@ const EXTRACTOR_JSON_SCHEMA: Record<string, unknown> = {
           includedQuantity: {
             type: 'number',
             description:
-              'ONLY if the page states a free allowance for this dimension (in the same unit as the price). ' +
-              'Omit entirely if the page states no free allowance — an assumed free tier is a fabricated discount.',
+              'ONLY if the page states a free allowance for this dimension, EXPRESSED IN THE ' +
+              'SAME UNIT the dimension bills in (see the `unit` given for the target). ' +
+              'If the free tier the page states is in a DIFFERENT unit than the dimension ' +
+              '(e.g. the page says "10 GiB free" but the dimension is priced per TiB, or ' +
+              '"3 free apps" but the dimension is priced per month), OMIT it — do not convert ' +
+              'and do not guess. An assumed or mis-united free tier is a fabricated discount.',
+          },
+          includedQuantityEvidence: {
+            type: 'string',
+            description:
+              'REQUIRED whenever you report includedQuantity: a VERBATIM substring of the page ' +
+              'that contains BOTH the allowance number AND its unit (e.g. "the first 1 gibibyte ' +
+              'is free"). A downstream machine check proves the number appears here and that the ' +
+              'unit matches the dimension — a mismatch silently drops the allowance to 0.',
           },
           evidence: {
             type: 'string',
@@ -150,7 +168,11 @@ const SYSTEM_PROMPT = [
   '   expected. Do NOT invent, approximate, or infer a price. A gap is honest; a guess',
   '   is a bug. Under-answering is always better than answering wrong.',
   '4. includedQuantity: emit it ONLY when the page explicitly states a free/included',
-  '   allowance. Never assume a free tier.',
+  '   allowance IN THE SAME UNIT the dimension bills in. If the free tier is stated in a',
+  '   different unit than the dimension (10 GiB free vs a per-TiB price; 3 free apps vs a',
+  '   per-month price), OMIT it rather than convert — a mis-united allowance is a fabricated',
+  '   discount. When you DO emit it, also emit includedQuantityEvidence: a verbatim excerpt',
+  '   containing both the allowance number and its unit. Never assume a free tier.',
   '5. Report the price in the unit the dimension asks for (per hour, per GB-month, per',
   '   million requests, etc.). Match the hint. Do not convert between units.',
 ].join('\n');
@@ -259,6 +281,7 @@ export async function extractPrices(
       dimensionId: p.dimensionId,
       unitPriceUsd: p.unitPriceUsd,
       includedQuantity: p.includedQuantity ?? 0,
+      includedQuantityEvidence: p.includedQuantityEvidence ?? '',
       evidence: p.evidence,
     }));
 }

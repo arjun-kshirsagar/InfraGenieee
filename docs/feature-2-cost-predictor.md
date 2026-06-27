@@ -161,6 +161,20 @@ fallback everywhere. Where a structured feed is primary, the human pricing page
 still goes in `CatalogService.pricingUrl` — that is the URL a user clicks to
 check us, and it is what `PriceSource.url` cites.
 
+**AWS Price List quotes per single item; the catalog bills per batch.** The
+Price List's `pricePerUnit.USD` is per single request / WRU / etc., but the
+catalog's bulk dimensions declare `pricePerUnits` (e.g. `1_000_000` for
+`USD / million requests`) and the engine expects `unitPriceUsd` to be the
+per-batch price — exactly like the Tavily providers, whose pages quote
+"$0.40 per million". So an AWS Price List descriptor carries a `priceScale`
+(the descriptor-side twin of `pricePerUnits`): the adapter reports
+`rawPerUnit × priceScale`, while the evidence gate still runs against the RAW
+value in the record. `descriptors.test.ts` asserts `priceScale === pricePerUnits`
+for every AWS dimension so the two representations cannot drift (the SQS bug:
+without it, 1M messages billed `$0.0000004` instead of `$0.40`). CloudFront's
+per-viewer-geo egress/request meters live under the Price List's `aws-other`
+region, not `us-east-1`.
+
 **Azure `$filter` cookbook** (`armRegionName eq 'eastus'`, then narrow):
 
 - Postgres: `contains(productName,'PostgreSQL')`, `type eq 'Consumption'`,
@@ -274,8 +288,18 @@ monthly  = (billable / dimension.pricePerUnits) * record.unitPriceUsd
 - `choice.units` multiplies per-unit quantities. It does **not** multiply
   `months` or `seats` — you do not pay the Vercel Pro plan fee twice for running
   two functions. `deriveQuantities` owns that exemption.
-- `includedQuantity` is a **fetched** free allowance. An assumed free tier is a
-  fabricated discount.
+- `includedQuantity` is a **fetched** free allowance, and it must be **in the
+  dimension's own quantity unit** — it is subtracted from a quantity in that unit
+  (`billable = max(0, quantity - includedQuantity)`). An assumed free tier, OR a
+  real allowance stated in a *different* unit than the dimension bills in (e.g.
+  "10 GiB free" against a per-TiB dimension, "3 free apps" against a per-month
+  dimension), is a **fabricated discount** — the second kind just launders the
+  fabrication through a real number. So the allowance is held to the SAME
+  anti-fabrication gate as the price: `assertAllowanceInDimensionUnit` (in
+  `evidence.ts`) requires the extractor to supply an `includedQuantityEvidence`
+  excerpt proving both the allowance NUMBER and a unit token in the dimension's
+  family; anything unprovable or mis-united is coerced to `0` (never converted,
+  never guessed) and the human `freeTierNote` carries the caveat.
 - **Tiered pricing is flattened to the first paid tier in v1** and the SKU note
   says so. Modelling AWS's graduated S3 tiers correctly needs a tier ladder in
   the price record; that is a deliberate v2 item, and over-estimating slightly at

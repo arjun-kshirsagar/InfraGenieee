@@ -60,6 +60,46 @@ describe('aws-price-list adapter — happy path against recorded real data', () 
   });
 });
 
+describe('aws-price-list adapter — 🔴 priceScale: per-single-unit feed → per-batch report', () => {
+  it('scales the raw per-request price up to the catalog per-batch representation', () => {
+    // The Price List quotes per single request (0.0000005); the SQS `requests`
+    // dimension bills per million (pricePerUnits 1_000_000). With priceScale the
+    // adapter reports 0.0000005 × 1_000_000 = 0.50, so the engine's
+    // billable/pricePerUnits × unitPriceUsd lands the right total instead of
+    // billing $0.0000005 for a million messages (the coordination bug).
+    const q: AwsPriceListQuery = {
+      ...base,
+      skuId: 'aws:sqs:standard',
+      dimensionId: 'requests',
+      attributes: { group: 'SQS-APIRequest-Tier1', queueType: 'FIFO (first-in, first-out)' },
+      expectedUnit: 'Requests',
+      priceScale: 1_000_000,
+    };
+    const [res] = _priceAwsPriceListFromIndex(index, FEED_URL, AT, [q]);
+    expect(res.kind).toBe('record');
+    if (res.kind !== 'record') return;
+    expect(res.candidate.unitPriceUsd).toBe(0.5); // 0.0000005 × 1e6
+    // The note explains the scaling for provenance.
+    expect(res.candidate.note).toMatch(/per-batch price/);
+    // The evidence still carries the RAW per-unit value the gate proved.
+    expect(res.candidate.evidence).toContain('0.0000005000');
+  });
+
+  it('a default scale of 1 is a no-op (per-hour / per-GB dimensions)', () => {
+    const q: AwsPriceListQuery = {
+      ...base,
+      skuId: 'aws:sqs:standard',
+      dimensionId: 'requests',
+      attributes: { group: 'SQS-APIRequest-Tier1', queueType: 'FIFO (first-in, first-out)' },
+      expectedUnit: 'Requests',
+    };
+    const [res] = _priceAwsPriceListFromIndex(index, FEED_URL, AT, [q]);
+    expect(res.kind).toBe('record');
+    if (res.kind !== 'record') return;
+    expect(res.candidate.unitPriceUsd).toBe(0.0000005); // unscaled
+  });
+});
+
 describe('aws-price-list adapter — ambiguity and misses are gaps, never guesses', () => {
   it('returns an ambiguous gap when the attribute filter matches >1 product', () => {
     // Both fixture products share group SQS-APIRequest-Tier1 (FIFO + Fair).

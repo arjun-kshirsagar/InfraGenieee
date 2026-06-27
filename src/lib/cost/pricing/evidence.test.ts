@@ -10,7 +10,10 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { assertEvidenceSupportsPrice } from '@/lib/cost/pricing/evidence';
+import {
+  assertEvidenceSupportsPrice,
+  assertAllowanceInDimensionUnit,
+} from '@/lib/cost/pricing/evidence';
 import type { FetchedPage } from '@/lib/cost/pricing-seam';
 
 /** Build a FetchedPage around a markdown body. */
@@ -206,6 +209,120 @@ describe('assertEvidenceSupportsPrice — numeric-token check (requirement 2)', 
       page: page(DO_ROW),
       evidence: DO_ROW,
       unitPriceUsd: Number.NaN,
+    });
+    expect(reason).not.toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The ALLOWANCE gate (MAJOR-1) — a fetched free tier must be PROVEN to be in  */
+/* the dimension's own unit, or it is a fabricated discount laundered through  */
+/* a real number. Each snippet below is the verbatim page text the QA report   */
+/* (docs/qa-feature-2.md §MAJOR-1) traced each broken allowance to.            */
+/* -------------------------------------------------------------------------- */
+
+describe('assertAllowanceInDimensionUnit — the allowance gate', () => {
+  const pubsubPage =
+    'Pub/Sub throughput pricing. Note: the first 10 GiB of throughput per month is free (Message Delivery Basic).';
+  const doStaticPage =
+    'App Platform Free tier: 3 apps with static sites, 1 GiB/app monthly transfer, global CDN.';
+  const doFuncPage =
+    'DigitalOcean Functions: after the 90,000 GiB-seconds free monthly grant, ' +
+    '$0.0000185 per GiB-seconds for additional memory and runtime.';
+  const gcpEgressPage =
+    'Premium Tier internet egress to North America. 0 gibibyte to 1 gibibyte $0.00 (Free). ' +
+    '1 gibibyte to 1,024 gibibyte $0.12 / 1 gibibyte.';
+
+  it('🔴 REJECTS "10 GiB free" against a per-TiB dimension (1024× too generous)', () => {
+    // gcp:pubsub:standard · throughput-tib, unit "USD / TiB": the free tier is
+    // stated in GiB but the dimension bills in TiB — a units mismatch.
+    const reason = assertAllowanceInDimensionUnit({
+      page: page(pubsubPage),
+      allowanceEvidence: 'the first 10 GiB of throughput per month is free',
+      includedQuantity: 10,
+      dimensionUnit: 'USD / TiB',
+    });
+    expect(reason).not.toBeNull();
+    expect(reason).toMatch(/bytes-tera|bytes-giga/);
+  });
+
+  it('🔴 REJECTS "3 apps free" against a per-month dimension (free forever)', () => {
+    // digitalocean:app-platform-static:starter · site-month, unit "USD / site-month":
+    // "3 apps" is a COUNT, not months — cannot be subtracted from a months quantity.
+    const reason = assertAllowanceInDimensionUnit({
+      page: page(doStaticPage),
+      allowanceEvidence: '3 apps with static sites',
+      includedQuantity: 3,
+      dimensionUnit: 'USD / site-month',
+    });
+    expect(reason).not.toBeNull();
+  });
+
+  it('🔴 REJECTS an allowance whose evidence is the PRICE sentence, not the allowance', () => {
+    // digitalocean:functions:standard · gib-second: the QA report found 90,000 was
+    // lifted from a different sentence than the cited price excerpt. If the evidence
+    // offered is the price sentence, the allowance number is not in it → rejected.
+    const reason = assertAllowanceInDimensionUnit({
+      page: page(doFuncPage),
+      allowanceEvidence: '$0.0000185 per GiB-seconds for additional memory and runtime',
+      includedQuantity: 90000,
+      dimensionUnit: 'USD / GiB-second',
+    });
+    expect(reason).not.toBeNull();
+    expect(reason).toMatch(/does not appear as a numeric token/);
+  });
+
+  it('✅ ACCEPTS a genuine same-unit allowance stated with the correct number + unit', () => {
+    // If the DO Functions page states the 90,000 GiB-seconds grant verbatim and it
+    // is offered as the allowance evidence, it is in the dimension's unit → kept.
+    const reason = assertAllowanceInDimensionUnit({
+      page: page(doFuncPage),
+      allowanceEvidence: 'the 90,000 GiB-seconds free monthly grant',
+      includedQuantity: 90000,
+      dimensionUnit: 'USD / GiB-second',
+    });
+    expect(reason).toBeNull();
+  });
+
+  it('✅ ACCEPTS "1 gibibyte free" against a per-GiB dimension (the correct case)', () => {
+    // gcp:egress:internet · egress-gib, unit "USD / GiB": "gibibyte" and "GiB" are
+    // the same family, and the allowance 1 is in that unit → correctly kept.
+    const reason = assertAllowanceInDimensionUnit({
+      page: page(gcpEgressPage),
+      allowanceEvidence: '0 gibibyte to 1 gibibyte $0.00 (Free)',
+      includedQuantity: 1,
+      dimensionUnit: 'USD / GiB',
+    });
+    expect(reason).toBeNull();
+  });
+
+  it('a zero allowance is a no-op (nothing to prove)', () => {
+    expect(
+      assertAllowanceInDimensionUnit({
+        page: page(gcpEgressPage),
+        allowanceEvidence: '',
+        includedQuantity: 0,
+        dimensionUnit: 'USD / GiB',
+      }),
+    ).toBeNull();
+  });
+
+  it('rejects a positive allowance with empty evidence (fetched, not assumed)', () => {
+    const reason = assertAllowanceInDimensionUnit({
+      page: page(gcpEgressPage),
+      allowanceEvidence: '',
+      includedQuantity: 1,
+      dimensionUnit: 'USD / GiB',
+    });
+    expect(reason).not.toBeNull();
+  });
+
+  it('rejects an allowance whose evidence is not on the page', () => {
+    const reason = assertAllowanceInDimensionUnit({
+      page: page(gcpEgressPage),
+      allowanceEvidence: 'first 5 gibibytes are free', // not present verbatim
+      includedQuantity: 5,
+      dimensionUnit: 'USD / GiB',
     });
     expect(reason).not.toBeNull();
   });

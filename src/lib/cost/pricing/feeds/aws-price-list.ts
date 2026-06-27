@@ -52,6 +52,26 @@ export interface AwsPriceListQuery {
   /** Optional expected `unit` on the price dimension (e.g. `Requests`), a guard
    *  against joining a storage row to a request dimension. */
   expectedUnit?: string;
+  /**
+   * 🔴 Price-batch SCALE — how many single feed-units make up one catalog
+   * `pricePerUnits`. The AWS Price List quotes `pricePerUnit.USD` PER SINGLE
+   * ITEM (per request, per WRU), but the catalog's bulk dimensions declare
+   * `pricePerUnits` (e.g. `1_000_000` for `USD / million requests`) and the
+   * engine does `billable / pricePerUnits × unitPriceUsd` — so it expects
+   * `unitPriceUsd` to be the PER-BATCH price, exactly like the Tavily providers
+   * whose pages quote "$0.40 per million". Left at the default `1`, the raw
+   * per-request price ($0.0000004) would be billed as if it were the
+   * per-million price, understating by 10⁶× (this is the coordination gap
+   * `t_e2022194` flagged: SQS shipped $0.0000004 where the truth is $0.40).
+   *
+   * When set, the adapter reports `unitPriceUsd = rawPerUnit × priceScale` and
+   * MUST equal the catalog dimension's `pricePerUnits` for that dimension — a
+   * build-time guard asserts they match so they cannot silently drift. The
+   * evidence gate still runs against the RAW `pricePerUnit.USD` in the record
+   * (always present, no dependency on the description's phrasing), so a
+   * mis-joined SKU is caught before any scaling.
+   */
+  priceScale?: number;
 }
 
 interface AwsProduct {
@@ -210,8 +230,8 @@ function priceOne(
   if (usd === undefined) {
     return gap(skuId, dimensionId, 'not_found_on_page', 'matched dimension has no pricePerUnit.USD');
   }
-  const unitPriceUsd = Number(usd);
-  if (!Number.isFinite(unitPriceUsd)) {
+  const rawUnitPriceUsd = Number(usd);
+  if (!Number.isFinite(rawUnitPriceUsd)) {
     return gap(skuId, dimensionId, 'not_found_on_page', `pricePerUnit.USD is not numeric: ${usd}`);
   }
 
@@ -220,12 +240,27 @@ function priceOne(
   // so the gate proves the number — a mis-join fails here rather than being
   // trusted. page === evidence, so the substring check holds trivially and the
   // load-bearing check is the number proof against the record we actually read.
+  //
+  // CRUCIAL: we gate the RAW per-unit price (the value literally in the record),
+  // then scale it to the catalog's per-batch representation for reporting. This
+  // keeps the anti-fabrication proof independent of the description's phrasing.
   const evidence = serializeRecordAsEvidence(picked);
   const page = rawBodyAsPage(feedUrl, evidence, fetchedAt);
-  const reason = assertEvidenceSupportsPrice({ page, evidence, unitPriceUsd });
+  const reason = assertEvidenceSupportsPrice({ page, evidence, unitPriceUsd: rawUnitPriceUsd });
   if (reason !== null) {
     return gap(skuId, dimensionId, 'evidence_rejected', reason);
   }
+
+  // The AWS Price List quotes per single item; the catalog bulk dimension bills
+  // per `pricePerUnits`, so report the per-batch price (see `priceScale`). A
+  // scale of 1 (the default) is a no-op for per-hour / per-GB-month dimensions.
+  const priceScale = query.priceScale ?? 1;
+  const unitPriceUsd = rawUnitPriceUsd * priceScale;
+
+  const scaleNote =
+    priceScale !== 1
+      ? `per-batch price = ${rawUnitPriceUsd} × ${priceScale} (feed quotes per single unit)`
+      : undefined;
 
   return {
     kind: 'record',
@@ -237,7 +272,13 @@ function priceOne(
       evidence,
       feedUrl,
       fetchedAt,
-      note: query.descriptionContains ? undefined : 'first/base tier (tiered pricing flattened, docs §7)',
+      note:
+        [
+          query.descriptionContains ? undefined : 'first/base tier (tiered pricing flattened, docs §7)',
+          scaleNote,
+        ]
+          .filter(Boolean)
+          .join('; ') || undefined,
     },
   };
 }

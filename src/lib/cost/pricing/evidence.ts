@@ -28,7 +28,7 @@
  * never averaged. Returning `null` means "accepted".
  */
 
-import type { AssertEvidenceSupportsPrice } from '../pricing-seam';
+import type { AssertEvidenceSupportsPrice, FetchedPage } from '../pricing-seam';
 
 /** Collapse every run of whitespace to a single space, and trim the ends. Used
  *  on BOTH the evidence and the page before the substring test — this is the
@@ -165,3 +165,124 @@ export const assertEvidenceSupportsPrice: AssertEvidenceSupportsPrice = ({
 };
 
 export default assertEvidenceSupportsPrice;
+
+/* -------------------------------------------------------------------------- */
+/* The ALLOWANCE gate — includedQuantity is a fetched discount, so gate it     */
+/* exactly like a price (MAJOR-1).                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A dimension's price `unit` (e.g. `USD / GiB`, `USD / TiB`, `USD / site-month`)
+ * maps to a canonical QUANTITY FAMILY — the thing its `includedQuantity` must be
+ * counted in. Two units are allowance-compatible IFF they share a family. This
+ * is what refuses "10 GiB free" against a per-TiB dimension (bytes-tebi ≠
+ * bytes-gibi) or "3 apps free" against a per-month dimension (count ≠ month),
+ * while still accepting "1 gibibyte free" against a per-GiB dimension
+ * (bytes-gibi, `gibibyte` and `GiB` are the same family).
+ *
+ * The families are deliberately coarse and byte-scale-aware: a mis-scaled
+ * allowance (GiB vs TiB) is a DIFFERENT family, not a convertible one — we do
+ * NOT silently convert, because a fetched allowance that needs conversion is a
+ * different number than the page states, which is the fabrication §7 forbids.
+ * Unknown/ambiguous units fall through to `null` (no family) and their allowance
+ * is rejected, i.e. treated as 0 — the honest default.
+ */
+function quantityFamily(unitToken: string): string | null {
+  const u = unitToken.toLowerCase().trim();
+  // Order matters: check the more specific / larger byte units first.
+  if (/\bpib\b|pebibyte|petabyte|\bpb\b/.test(u)) return 'bytes-peta';
+  if (/\btib\b|tebibyte|terabyte|\btb\b/.test(u)) return 'bytes-tera';
+  if (/\bgib\b|gibibyte|gigabyte|\bgb\b/.test(u)) return 'bytes-giga';
+  if (/\bmib\b|mebibyte|megabyte|\bmb\b/.test(u)) return 'bytes-mega';
+  if (/gib-?second|gibibyte-?second|gb-?second/.test(u)) return 'gib-second';
+  if (/\bmonth\b|\bmo\b/.test(u)) return 'month';
+  if (/\brequest|\bcall\b|\bops?\b|operation/.test(u)) return 'request';
+  if (/\bhour\b|\bhr\b/.test(u)) return 'hour';
+  if (/\bsecond\b|\bsec\b/.test(u)) return 'second';
+  return null;
+}
+
+/**
+ * Extract the DENOMINATOR of a `USD / X` price unit — the `X` the allowance must
+ * be counted in. `USD / GiB-month` → `GiB-month`, `USD / TiB` → `TiB`.
+ */
+function unitDenominator(priceUnit: string): string {
+  const idx = priceUnit.lastIndexOf('/');
+  return (idx >= 0 ? priceUnit.slice(idx + 1) : priceUnit).trim();
+}
+
+/**
+ * The ALLOWANCE gate. An extractor may report `includedQuantity` (a fetched free
+ * tier). It is subtracted from a quantity in the dimension's own unit, so it MUST
+ * be in that unit — a mis-united allowance is a "fabricated discount" (§7) that
+ * launders itself through a real number (the exact MAJOR-1 bug: "10 GiB free"
+ * subtracted from a TiB quantity, 1024× too generous).
+ *
+ * PURE. Returns `null` when the allowance is PROVEN to be real AND in the
+ * dimension's unit; returns a human reason otherwise. The caller coerces a
+ * rejected allowance to `0` (never a guess), leaving the human `freeTierNote` to
+ * carry the caveat.
+ *
+ * The proof, all mechanical:
+ *   1. `allowanceEvidence` is a verbatim substring of the page (same check as a
+ *      price).
+ *   2. `includedQuantity` appears as a whole numeric token inside it.
+ *   3. The dimension's unit family (bytes-giga / month / request / …) also
+ *      appears in the evidence, i.e. the free tier is stated in the SAME unit the
+ *      dimension bills in. A units mismatch (GiB free vs TiB billed, apps free vs
+ *      months billed) fails here and the allowance is dropped to 0.
+ */
+export function assertAllowanceInDimensionUnit(args: {
+  page: FetchedPage;
+  allowanceEvidence: string;
+  includedQuantity: number;
+  dimensionUnit: string;
+}): string | null {
+  const { page, allowanceEvidence, includedQuantity, dimensionUnit } = args;
+
+  if (!Number.isFinite(includedQuantity) || includedQuantity <= 0) {
+    // A zero/negative allowance is a no-op; nothing to prove.
+    return includedQuantity === 0 ? null : `includedQuantity is not a positive finite number.`;
+  }
+
+  const trimmed = allowanceEvidence.trim();
+  if (trimmed.length === 0) {
+    return 'allowance evidence is empty; a free tier must be fetched, not assumed (§7).';
+  }
+
+  // (1) verbatim substring of the page.
+  const haystack = collapseWhitespace(page.markdown);
+  const needle = collapseWhitespace(allowanceEvidence);
+  if (!haystack.includes(needle)) {
+    return 'allowance evidence is not a verbatim substring of the page.';
+  }
+
+  // (2) the allowance number appears as a whole token in its evidence.
+  const target = toPlainDecimal(includedQuantity);
+  const hasNumber = numericTokens(needle).some((t) => canonicalizeNumericToken(t) === target);
+  if (!hasNumber) {
+    return `allowance ${target} does not appear as a numeric token in its evidence.`;
+  }
+
+  // (3) the evidence names the dimension's OWN unit family — proving the free
+  //     tier is stated in the unit the dimension bills in, not a different one.
+  const wantFamily = quantityFamily(unitDenominator(dimensionUnit));
+  if (wantFamily === null) {
+    return (
+      `dimension unit "${dimensionUnit}" has no recognised quantity family, so an ` +
+      `allowance cannot be proven to be in its unit; dropping to 0 (§7).`
+    );
+  }
+  const evidenceFamily = quantityFamily(needle);
+  if (evidenceFamily !== wantFamily) {
+    return (
+      `allowance is stated in "${evidenceFamily ?? 'an unrecognised unit'}" but the ` +
+      `dimension bills in "${wantFamily}" (unit "${dimensionUnit}"); a mis-united ` +
+      `allowance is a fabricated discount (§7) — dropping to 0.`
+    );
+  }
+
+  return null;
+}
+
+export const _internal = { quantityFamily, unitDenominator };

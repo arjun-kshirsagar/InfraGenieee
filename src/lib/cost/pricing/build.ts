@@ -58,7 +58,7 @@ import {
   type FetchedPage,
 } from '../pricing-seam';
 import { priceBookCache } from './cache';
-import { assertEvidenceSupportsPrice } from './evidence';
+import { assertEvidenceSupportsPrice, assertAllowanceInDimensionUnit } from './evidence';
 import { extractPrices, type ExtractionTarget } from './extractor';
 import { fetchPricingPages } from './tavily';
 import {
@@ -151,7 +151,12 @@ type Resolved =
 function resolveExtracted(
   target: DimensionTarget,
   page: FetchedPage,
-  candidate: { unitPriceUsd: number; includedQuantity: number; evidence: string },
+  candidate: {
+    unitPriceUsd: number;
+    includedQuantity: number;
+    includedQuantityEvidence?: string;
+    evidence: string;
+  },
   extractorModel: string,
 ): Resolved {
   const reason = assertEvidenceSupportsPrice({
@@ -170,13 +175,37 @@ function resolveExtracted(
       },
     };
   }
+
+  // The ALLOWANCE gate (MAJOR-1): a fetched free tier must be PROVEN to be in
+  // the dimension's own unit, or it is a fabricated discount. An unproven or
+  // mis-united allowance is coerced to 0 (never a guess) — the human
+  // `freeTierNote` still carries the caveat. This is the same anti-fabrication
+  // posture as the price, applied to the discount.
+  let includedQuantity = candidate.includedQuantity;
+  if (includedQuantity > 0) {
+    const allowanceReason = assertAllowanceInDimensionUnit({
+      page,
+      allowanceEvidence: candidate.includedQuantityEvidence ?? '',
+      includedQuantity,
+      dimensionUnit: target.unit,
+    });
+    if (allowanceReason !== null) {
+      // Drop the allowance to 0 rather than sink the (valid) PRICE record — the
+      // price is real; only the discount was unprovable. Logged for provenance.
+      console.warn(
+        `[cost.build] dropped includedQuantity for ${target.skuId} · ${target.dimensionId}: ${allowanceReason}`,
+      );
+      includedQuantity = 0;
+    }
+  }
+
   return {
     kind: 'record',
     record: {
       skuId: target.skuId,
       dimensionId: target.dimensionId,
       unitPriceUsd: candidate.unitPriceUsd,
-      includedQuantity: candidate.includedQuantity,
+      includedQuantity,
       currency: 'USD',
       source: {
         url: target.pricingUrl,

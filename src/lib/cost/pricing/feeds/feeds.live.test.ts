@@ -113,10 +113,35 @@ describe.skipIf(!RUN_LIVE)('price feeds — LIVE smoke (real free feeds, no key)
   );
 
   it(
-    'AWS Price List / EC2 metered feeds build real, schema-valid records',
+    '🔴 AWS Price List / EC2 metered feeds price the five common roles (MAJOR-2 coverage)',
     async () => {
       const book = await buildPriceBook('aws', { force: true });
       assertHealthyFeedBook(book, 'aws', 'https://');
+
+      // MAJOR-2: AWS was 4/53 (8%) priced — a wall of $0.00 floors. It must now
+      // price the five roles that appear in almost every PRD, spot-checkable
+      // against the aws.amazon.com page each record cites.
+      const priced = new Set(book.records.map((r) => `${r.skuId}|${r.dimensionId}`));
+      const mustPrice = [
+        'aws:rds-postgres:t4g-micro|instance-hour', // db-relational (RDS)
+        'aws:elasticache:t4g-micro|node-hour', // cache-redis (ElastiCache)
+        'aws:s3:standard|storage-gb-month', // object-storage (S3)
+        'aws:cloudfront:payg|egress-gb', // cdn (CloudFront)
+        'aws:egress:internet|egress-gb', // egress
+      ];
+      for (const key of mustPrice) {
+        expect(priced.has(key), `AWS must price ${key} (a common-role dimension)`).toBe(true);
+      }
+
+      // Coverage is materially up from 8%: at least 45 of 53 dimensions priced.
+      expect(book.records.length).toBeGreaterThanOrEqual(45);
+
+      // 🔴 The bulk-scale coordination is correct end-to-end: SQS reports the
+      // per-MILLION price (~$0.40), NOT the raw per-request $0.0000004. A value
+      // under $0.01 here would mean priceScale never applied (the old bug).
+      const sqs = book.records.find((r) => r.skuId === 'aws:sqs:standard');
+      expect(sqs, 'SQS requests must be priced').toBeDefined();
+      expect(sqs!.unitPriceUsd).toBeGreaterThan(0.1); // per-million, not per-request
     },
     LIVE_TIMEOUT_MS,
   );

@@ -71,11 +71,25 @@ const key = (skuId: string, dimensionId: string): string => `${skuId}|${dimensio
 const AWS_REGION = PRICED_REGION.aws; // us-east-1
 const AZURE_REGION = PRICED_REGION.azure; // eastus
 
+/** CloudFront's per-viewer-geo egress/request meters live under this synthetic
+ *  region in the Price List (not us-east-1). Verified live 2026-07-26. */
+const CLOUDFRONT_REGION = 'aws-other';
+
 /* -------------------------------------------------------------------------- */
-/* AWS — EC2 on-demand hours (verified live in B4: t3.small → 0.0208/hr)      */
+/* AWS — feed descriptors. EC2 hours via the metered feed; everything else    */
+/* via the Price List Bulk API. EVERY offerCode + attribute matcher below was  */
+/* VERIFIED live against the Price List on 2026-07-26 (see the spot-checks in  */
+/* aws-price-list.test.ts). Each matcher isolates EXACTLY ONE product in       */
+/* us-east-1; a matcher that hits several products degrades to an `ambiguous`  */
+/* gap (never a coin-flip), a matcher that hits none to a `not_found` gap, and */
+/* the evidence gate proves the number on every survivor. A `priceScale` is    */
+/* set wherever the Price List quotes per single item but the catalog dimension */
+/* bills per batch — it MUST equal that dimension's catalog `pricePerUnits`     */
+/* (asserted by aws-price-list.test.ts against the assembled catalog).          */
 /* -------------------------------------------------------------------------- */
 
 const AWS_DESCRIPTORS: Record<string, FeedDescriptor> = {
+  /* ---- compute-web: EC2 on-demand hours (metered feed) ------------------ */
   [key('aws:ec2:t3-small', 'instance-hour')]: {
     feed: 'ec2-metered',
     query: { instanceType: 't3.small' },
@@ -89,10 +103,96 @@ const AWS_DESCRIPTORS: Record<string, FeedDescriptor> = {
     query: { instanceType: 'm7i.large' },
   },
 
-  /* SQS Standard — offer code `AWSQueueService`, us-east-1. B4 verified the
-   * offer + shape live; the Standard queue's per-request Tier1 row is pinned by
-   * queueType + group. A wrong matcher degrades to an `ambiguous`/`not_found`
-   * gap (never a wrong price), and the evidence gate proves the number. */
+  /* ---- compute-web / compute-worker: Fargate (Price List, AmazonECS) ---- *
+   * Linux/x86 vCPU-hour + GB-hour. Verified: perCPU 0.04048/hr, GB 0.004445/hr.
+   * The `usagetype` (region-prefixed `USE1-`) isolates one row; ARM/Windows
+   * variants carry different usagetypes and are excluded. */
+  ...fargateDescriptors('aws:fargate:0-25vcpu'),
+  ...fargateDescriptors('aws:fargate:0-5vcpu'),
+  ...fargateDescriptors('aws:fargate:1vcpu'),
+  ...fargateDescriptors('aws:fargate-worker:0-5vcpu'),
+  ...fargateDescriptors('aws:fargate-worker:1vcpu'),
+  ...fargateDescriptors('aws:fargate-worker:2vcpu'),
+
+  /* ---- compute-serverless: Lambda (AWSLambda) --------------------------- *
+   * requests: per-request $0.0000002 → per-million $0.20 (priceScale 1e6).
+   * gb-second: x86 Tier-1 $0.0000166667; Arm Tier-1 $0.0000133334 (scale 1). */
+  ...lambdaDescriptors('aws:lambda:x86-512mb', 'x86'),
+  ...lambdaDescriptors('aws:lambda:x86-1024mb', 'x86'),
+  ...lambdaDescriptors('aws:lambda:arm-1024mb', 'arm'),
+
+  /* ---- static-hosting: S3 + CloudFront (S3 origin storage via AmazonS3, *
+   * CDN egress/requests via AmazonCloudFront aws-other) ------------------- */
+  [key('aws:s3-cloudfront:standard', 'storage-gb-month')]: s3StandardStorage(),
+  [key('aws:s3-cloudfront:standard', 'cdn-egress-gb')]: cloudfrontEgress(),
+  [key('aws:s3-cloudfront:standard', 'cdn-requests')]: cloudfrontRequests(10_000),
+
+  /* ---- db-relational: RDS PostgreSQL + Aurora Serverless v2 (AmazonRDS) - */
+  ...rdsDescriptors('aws:rds-postgres:t4g-micro', 'db.t4g.micro'),
+  ...rdsDescriptors('aws:rds-postgres:t4g-medium', 'db.t4g.medium'),
+  ...rdsDescriptors('aws:rds-postgres:m6g-large', 'db.m6g.large'),
+  [key('aws:aurora-serverless-v2:standard', 'acu-hour')]: {
+    feed: 'aws-price-list',
+    query: {
+      offerCode: 'AmazonRDS',
+      region: AWS_REGION,
+      attributes: { usagetype: 'Aurora:ServerlessV2Usage', databaseEngine: 'Aurora PostgreSQL' },
+      expectedUnit: 'ACU-Hr',
+    },
+  },
+  [key('aws:aurora-serverless-v2:standard', 'storage-gb-month')]: {
+    feed: 'aws-price-list',
+    query: {
+      offerCode: 'AmazonRDS',
+      region: AWS_REGION,
+      attributes: { usagetype: 'Aurora:StorageUsage', databaseEngine: 'Any' },
+      expectedUnit: 'GB-Mo',
+    },
+  },
+
+  /* ---- db-nosql: DynamoDB on-demand (AmazonDynamoDB) -------------------- *
+   * WRU/RRU quoted per single unit → per-million (priceScale 1e6). Storage
+   * flattens past the $0-free first-25-GB tier to the first paid tier. */
+  [key('aws:dynamodb:on-demand', 'write-request-units')]: {
+    feed: 'aws-price-list',
+    query: {
+      offerCode: 'AmazonDynamoDB',
+      region: AWS_REGION,
+      attributes: { usagetype: 'WriteRequestUnits', group: 'DDB-WriteUnits' },
+      expectedUnit: 'WriteRequestUnits',
+      priceScale: 1_000_000,
+    },
+  },
+  [key('aws:dynamodb:on-demand', 'read-request-units')]: {
+    feed: 'aws-price-list',
+    query: {
+      offerCode: 'AmazonDynamoDB',
+      region: AWS_REGION,
+      attributes: { usagetype: 'ReadRequestUnits', group: 'DDB-ReadUnits' },
+      expectedUnit: 'ReadRequestUnits',
+      priceScale: 1_000_000,
+    },
+  },
+  [key('aws:dynamodb:on-demand', 'storage-gb-month')]: {
+    feed: 'aws-price-list',
+    query: {
+      offerCode: 'AmazonDynamoDB',
+      region: AWS_REGION,
+      attributes: { usagetype: 'TimedStorage-ByteHrs' },
+      // Skip the $0.00 first-25-GB free tier; price the first PAID tier (§7).
+      descriptionContains: 'beyond first 25',
+      expectedUnit: 'GB-Mo',
+    },
+  },
+
+  /* ---- cache-redis: ElastiCache Valkey nodes (AmazonElastiCache) -------- */
+  [key('aws:elasticache:t4g-micro', 'node-hour')]: elastiCacheNode('cache.t4g.micro'),
+  [key('aws:elasticache:t4g-small', 'node-hour')]: elastiCacheNode('cache.t4g.small'),
+  [key('aws:elasticache:m7g-large', 'node-hour')]: elastiCacheNode('cache.m7g.large'),
+
+  /* ---- queue-basic: SQS Standard (AWSQueueService) --------------------- *
+   * Verified live in B4. Per-request $0.0000004 → per-million $0.40
+   * (priceScale 1e6): without it the engine billed $0.0000004 for 1M msgs. */
   [key('aws:sqs:standard', 'requests')]: {
     feed: 'aws-price-list',
     query: {
@@ -100,9 +200,245 @@ const AWS_DESCRIPTORS: Record<string, FeedDescriptor> = {
       region: AWS_REGION,
       attributes: { group: 'SQS-APIRequest-Tier1', queueType: 'Standard' },
       expectedUnit: 'Requests',
+      priceScale: 1_000_000,
+    },
+  },
+
+  /* ---- queue-kafka: MSK Standard brokers + storage (AmazonMSK) ---------- */
+  ...mskDescriptors('aws:msk:m7g-large', 'USE1-Kafka.m7g.large'),
+  ...mskDescriptors('aws:msk:m5-2xlarge', 'USE1-Kafka.m5.2xlarge'),
+
+  /* ---- object-storage: S3 Standard storage + PUT/GET requests --------- */
+  [key('aws:s3:standard', 'storage-gb-month')]: s3StandardStorage(),
+  [key('aws:s3:standard', 'put-requests')]: {
+    feed: 'aws-price-list',
+    query: {
+      offerCode: 'AmazonS3',
+      region: AWS_REGION,
+      attributes: { usagetype: 'Requests-Tier1', group: 'S3-API-Tier1' },
+      expectedUnit: 'Requests',
+      priceScale: 1_000, // per-request → per-1,000 requests
+    },
+  },
+  [key('aws:s3:standard', 'get-requests')]: {
+    feed: 'aws-price-list',
+    query: {
+      offerCode: 'AmazonS3',
+      region: AWS_REGION,
+      attributes: { usagetype: 'Requests-Tier2', group: 'S3-API-Tier2' },
+      expectedUnit: 'Requests',
+      priceScale: 1_000, // per-request → per-1,000 requests
+    },
+  },
+
+  /* ---- cdn: CloudFront pay-as-you-go egress + HTTPS requests ----------- */
+  [key('aws:cloudfront:payg', 'egress-gb')]: cloudfrontEgress(),
+  [key('aws:cloudfront:payg', 'https-requests')]: cloudfrontRequests(10_000),
+
+  /* ---- search: OpenSearch data nodes + gp3 storage (AmazonES) ---------- */
+  ...openSearchDescriptors('aws:opensearch:t3-small', 't3.small.search', 'ESInstance:t3.small'),
+  ...openSearchDescriptors('aws:opensearch:m6g-large', 'm6g.large.search', 'ESInstance:m6g.large'),
+
+  /* ---- egress: EC2/origin → internet (AWSDataTransfer) ----------------- *
+   * Flattened to the first paid tier ($0.09/GB, first 10 TB, docs §7). */
+  [key('aws:egress:internet', 'egress-gb')]: {
+    feed: 'aws-price-list',
+    query: {
+      offerCode: 'AWSDataTransfer',
+      region: AWS_REGION,
+      attributes: { transferType: 'AWS Outbound', fromLocation: 'US East (N. Virginia)' },
+      expectedUnit: 'GB',
     },
   },
 };
+
+/* ---- descriptor factories (keep the table above readable) ------------- */
+
+function fargateDescriptors(skuId: string): Record<string, FeedDescriptor> {
+  return {
+    [key(skuId, 'vcpu-hour')]: {
+      feed: 'aws-price-list',
+      query: {
+        offerCode: 'AmazonECS',
+        region: AWS_REGION,
+        attributes: { usagetype: 'USE1-Fargate-vCPU-Hours:perCPU' },
+      },
+    },
+    [key(skuId, 'gb-hour')]: {
+      feed: 'aws-price-list',
+      query: {
+        offerCode: 'AmazonECS',
+        region: AWS_REGION,
+        attributes: { usagetype: 'USE1-Fargate-GB-Hours' },
+      },
+    },
+  };
+}
+
+function lambdaDescriptors(skuId: string, arch: 'x86' | 'arm'): Record<string, FeedDescriptor> {
+  const durationGroup = arch === 'arm' ? 'AWS-Lambda-Duration-ARM' : 'AWS-Lambda-Duration';
+  const durationUsage = arch === 'arm' ? 'Lambda-GB-Second-ARM' : 'Lambda-GB-Second';
+  return {
+    [key(skuId, 'requests')]: {
+      feed: 'aws-price-list',
+      query: {
+        offerCode: 'AWSLambda',
+        region: AWS_REGION,
+        attributes: { group: 'AWS-Lambda-Requests', usagetype: 'Request' },
+        priceScale: 1_000_000, // per-request → per-million requests
+      },
+    },
+    [key(skuId, 'gb-second')]: {
+      feed: 'aws-price-list',
+      query: {
+        offerCode: 'AWSLambda',
+        region: AWS_REGION,
+        attributes: { group: durationGroup, usagetype: durationUsage },
+        // Two tiers exist; the lowest beginRange (Tier-1) is picked deterministically.
+      },
+    },
+  };
+}
+
+function rdsDescriptors(skuId: string, instanceType: string): Record<string, FeedDescriptor> {
+  return {
+    [key(skuId, 'instance-hour')]: {
+      feed: 'aws-price-list',
+      query: {
+        offerCode: 'AmazonRDS',
+        region: AWS_REGION,
+        attributes: { instanceType, databaseEngine: 'PostgreSQL', deploymentOption: 'Single-AZ' },
+        expectedUnit: 'Hrs',
+      },
+    },
+    [key(skuId, 'storage-gb-month')]: {
+      feed: 'aws-price-list',
+      query: {
+        offerCode: 'AmazonRDS',
+        region: AWS_REGION,
+        attributes: {
+          databaseEngine: 'PostgreSQL',
+          deploymentOption: 'Single-AZ',
+          usagetype: 'RDS:GP3-Storage',
+        },
+        expectedUnit: 'GB-Mo',
+      },
+    },
+  };
+}
+
+function elastiCacheNode(instanceType: string): FeedDescriptor {
+  return {
+    feed: 'aws-price-list',
+    query: {
+      offerCode: 'AmazonElastiCache',
+      region: AWS_REGION,
+      // Valkey engine + un-prefixed NodeUsage isolates the standard on-demand
+      // node (excludes ExtendedSupport `USE1-…` rows and Redis/Memcached).
+      attributes: {
+        instanceType,
+        cacheEngine: 'Valkey',
+        usagetype: `NodeUsage:${instanceType}`,
+      },
+      expectedUnit: 'Hrs',
+    },
+  };
+}
+
+function mskDescriptors(skuId: string, brokerUsagetype: string): Record<string, FeedDescriptor> {
+  return {
+    [key(skuId, 'broker-hour')]: {
+      feed: 'aws-price-list',
+      query: {
+        offerCode: 'AmazonMSK',
+        region: AWS_REGION,
+        attributes: { usagetype: brokerUsagetype },
+        expectedUnit: 'hours',
+      },
+    },
+    [key(skuId, 'storage-gb-month')]: {
+      feed: 'aws-price-list',
+      query: {
+        offerCode: 'AmazonMSK',
+        region: AWS_REGION,
+        attributes: { usagetype: 'USE1-Kafka.Storage.GP2' },
+        expectedUnit: 'GB-Mo',
+      },
+    },
+  };
+}
+
+function openSearchDescriptors(
+  skuId: string,
+  instanceType: string,
+  instanceUsagetype: string,
+): Record<string, FeedDescriptor> {
+  return {
+    [key(skuId, 'instance-hour')]: {
+      feed: 'aws-price-list',
+      query: {
+        offerCode: 'AmazonES',
+        region: AWS_REGION,
+        attributes: { instanceType, usagetype: instanceUsagetype },
+        expectedUnit: 'Hrs',
+      },
+    },
+    [key(skuId, 'storage-gb-month')]: {
+      feed: 'aws-price-list',
+      query: {
+        offerCode: 'AmazonES',
+        region: AWS_REGION,
+        attributes: { usagetype: 'ES:GP3-Storage' },
+        expectedUnit: 'GB-Mo',
+      },
+    },
+  };
+}
+
+function s3StandardStorage(): FeedDescriptor {
+  return {
+    feed: 'aws-price-list',
+    query: {
+      offerCode: 'AmazonS3',
+      region: AWS_REGION,
+      attributes: { volumeType: 'Standard', usagetype: 'TimedStorage-ByteHrs' },
+      // Three tiers on one SKU; the lowest beginRange = first 50 TB is picked.
+      descriptionContains: 'first 50 TB',
+      expectedUnit: 'GB-Mo',
+    },
+  };
+}
+
+function cloudfrontEgress(): FeedDescriptor {
+  return {
+    feed: 'aws-price-list',
+    query: {
+      offerCode: 'AmazonCloudFront',
+      region: CLOUDFRONT_REGION,
+      attributes: {
+        transferType: 'CloudFront Outbound',
+        fromLocation: 'United States',
+        usagetype: 'US-DataTransfer-Out-Bytes',
+      },
+      // Tiered; the lowest beginRange (first 10 TB / first paid tier) is picked.
+      expectedUnit: 'GB',
+    },
+  };
+}
+
+function cloudfrontRequests(scale: number): FeedDescriptor {
+  return {
+    feed: 'aws-price-list',
+    query: {
+      offerCode: 'AmazonCloudFront',
+      region: CLOUDFRONT_REGION,
+      // US HTTPS GET/HEAD (Tier2) — the "$0.0100 per 10,000 HTTPS Requests" row.
+      attributes: { usagetype: 'US-Requests-Tier2-HTTPS' },
+      expectedUnit: 'Requests',
+      priceScale: scale, // per-request → per-10,000 requests
+    },
+  };
+}
 
 /* -------------------------------------------------------------------------- */
 /* Azure — Retail Prices cookbook (docs §4). region + Consumption auto-pinned */
