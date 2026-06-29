@@ -60,16 +60,24 @@ export type PricingErrorCode =
 export class PricingError extends Error {
   readonly code: PricingErrorCode;
   readonly provider?: CloudProvider;
+  /**
+   * True ONLY for an `invalid_output` that was caused by `max_tokens`
+   * truncation (propagated from `GenerationError.truncated`). The recommend
+   * retry loop uses it to avoid retrying a deterministic truncation at the same
+   * budget — it retries once at a raised budget instead, or fails fast.
+   */
+  readonly truncated?: boolean;
 
   constructor(
     code: PricingErrorCode,
     message: string,
-    options?: { provider?: CloudProvider; cause?: unknown },
+    options?: { provider?: CloudProvider; cause?: unknown; truncated?: boolean },
   ) {
     super(message, { cause: options?.cause });
     this.name = 'PricingError';
     this.code = code;
     this.provider = options?.provider;
+    this.truncated = options?.truncated;
   }
 }
 

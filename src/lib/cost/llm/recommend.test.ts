@@ -296,9 +296,15 @@ describe('recommendDeployment — the verify contract', () => {
 });
 
 describe('recommendDeployment — error mapping', () => {
-  /** Reject the single call with `err`; return the (mapped) error the stage threw. */
-  async function codeOf(err: unknown): Promise<{ name?: string; code?: string }> {
-    mockCall.mockRejectedValueOnce(err);
+  /** Reject the call(s) with `err`; return the (mapped) error the stage threw.
+   *  Terminal codes (not_configured/unavailable/unexpected) fail on attempt 0;
+   *  `invalid_output` is retried, so queue the rejection for all bounded attempts. */
+  async function codeOf(err: unknown, retryable = false): Promise<{ name?: string; code?: string }> {
+    if (retryable) {
+      mockCall.mockRejectedValueOnce(err).mockRejectedValueOnce(err).mockRejectedValueOnce(err);
+    } else {
+      mockCall.mockRejectedValueOnce(err);
+    }
     return (await recommendDeployment(context, serviceCatalog).catch((e) => e)) as {
       name?: string;
       code?: string;
@@ -317,8 +323,8 @@ describe('recommendDeployment — error mapping', () => {
     expect(e.code).toBe('unavailable');
   });
 
-  it('maps GenerationError("invalid_output") → PricingError("invalid_output")', async () => {
-    const e = await codeOf(new GenerationError('invalid_output', 'schema failed'));
+  it('maps GenerationError("invalid_output") → PricingError("invalid_output") after bounded retries', async () => {
+    const e = await codeOf(new GenerationError('invalid_output', 'schema failed'), true);
     expect(e.code).toBe('invalid_output');
   });
 
@@ -390,5 +396,267 @@ describe('_internal.verifyChoice — the deterministic gate', () => {
       'aws:ec2:t3-small',
     );
     expect(v.pick).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* BLOCKER-4: coerceDraft repairs the observed serialisation drift            */
+/* -------------------------------------------------------------------------- */
+
+describe('_internal.coerceDraft — repairs real sonnet serialisation drift', () => {
+  /** A permissive draft with well-shaped selections/tradeoffs; only the field
+   *  under test is drifted. Kept minimal so the strict schema is satisfied once
+   *  the drift is repaired. */
+  function permissive(overrides: Record<string, unknown>): Record<string, unknown> {
+    return {
+      recommendedProvider: 'aws',
+      rationale:
+        'At medium scale on a startup budget with business-hours traffic, AWS offers a broad managed catalog and predictable RDS pricing.',
+      assumptions: ['No cache component was specified, so no cache is priced.'],
+      selections: [
+        {
+          provider: 'aws',
+          choices: [
+            { role: 'compute-web', serviceId: 'aws:ec2', skuId: 'aws:ec2:t3-medium', units: 1, enabled: true },
+          ],
+        },
+      ],
+      tradeoffs: [{ provider: 'aws', pros: ['Broad catalog'], cons: ['Steeper learning curve'] }],
+      ...overrides,
+    };
+  }
+
+  it('extractJsonArray pulls the array out of the observed XML-leak wrapper', () => {
+    // Exactly the shape captured live: a field VALUE containing the tool XML.
+    const leaked =
+      '\n<parameter name="assumptions">["Defaulted the relational engine to PostgreSQL.", "Assumed Redis is a pure in-memory cache."]';
+    const arr = _internal.extractJsonArray(leaked);
+    expect(arr).toEqual([
+      'Defaulted the relational engine to PostgreSQL.',
+      'Assumed Redis is a pure in-memory cache.',
+    ]);
+  });
+
+  it('extractJsonArray respects string literals containing brackets', () => {
+    const arr = _internal.extractJsonArray('junk ["a [nested] bracket", "b"] trailing');
+    expect(arr).toEqual(['a [nested] bracket', 'b']);
+  });
+
+  it('extractJsonArray returns null when there is no decodable array', () => {
+    expect(_internal.extractJsonArray('no array here')).toBeNull();
+    expect(_internal.extractJsonArray('[ unterminated')).toBeNull();
+  });
+
+  it('decodeArrayField decodes a plain JSON-string array', () => {
+    expect(_internal.decodeArrayField('[{"provider":"aws"}]')).toEqual([{ provider: 'aws' }]);
+  });
+
+  it('decodeArrayField passes a real array through untouched', () => {
+    const arr = [{ provider: 'aws' }];
+    expect(_internal.decodeArrayField(arr)).toBe(arr);
+  });
+
+  it('DRIFT A: assumptions leaked as an XML-wrapped string → decoded to a real array', () => {
+    const draft = _internal.coerceDraft(
+      permissive({
+        assumptions:
+          '\n<parameter name="assumptions">["Defaulted the relational engine to managed PostgreSQL with a read replica.", "Assumed Redis is used purely as an in-memory hot cache."]',
+      }) as never,
+    );
+    expect(draft.assumptions).toEqual([
+      'Defaulted the relational engine to managed PostgreSQL with a read replica.',
+      'Assumed Redis is used purely as an in-memory hot cache.',
+    ]);
+  });
+
+  it('DRIFT B: an assumption longer than 300 chars is CLAMPED, not rejected', () => {
+    const long = 'A'.repeat(420);
+    const draft = _internal.coerceDraft(permissive({ assumptions: [long] }) as never);
+    expect(draft.assumptions[0].length).toBeLessThanOrEqual(300);
+    // It is the model's own text, trimmed — starts with the original content.
+    expect(draft.assumptions[0].startsWith('AAAA')).toBe(true);
+  });
+
+  it('selections arriving as a JSON string are decoded', () => {
+    const selStr = JSON.stringify([
+      {
+        provider: 'aws',
+        choices: [
+          { role: 'compute-web', serviceId: 'aws:ec2', skuId: 'aws:ec2:t3-medium', units: 1, enabled: true },
+        ],
+      },
+    ]);
+    const draft = _internal.coerceDraft(permissive({ selections: selStr }) as never);
+    expect(Array.isArray(draft.selections)).toBe(true);
+    expect(draft.selections[0].provider).toBe('aws');
+  });
+
+  it('tradeoffs arriving as a JSON string are decoded', () => {
+    const tStr = JSON.stringify([{ provider: 'aws', pros: ['fast'], cons: ['pricey'] }]);
+    const draft = _internal.coerceDraft(permissive({ tradeoffs: tStr }) as never);
+    expect(Array.isArray(draft.tradeoffs)).toBe(true);
+    expect(draft.tradeoffs[0].provider).toBe('aws');
+  });
+
+  it('over-long tradeoff pros/cons entries are clamped to 240 chars, not rejected', () => {
+    const longPro = 'P'.repeat(400);
+    const longCon = 'C'.repeat(400);
+    const draft = _internal.coerceDraft(
+      permissive({ tradeoffs: [{ provider: 'aws', pros: [longPro], cons: [longCon] }] }) as never,
+    );
+    expect(draft.tradeoffs[0].pros[0].length).toBeLessThanOrEqual(240);
+    expect(draft.tradeoffs[0].cons[0].length).toBeLessThanOrEqual(240);
+  });
+
+  it('a genuinely malformed draft (missing required field) STILL throws PricingError(invalid_output)', () => {
+    // Clamp/decode must not paper over real garbage — the strict schema is still
+    // the gate. Here selections cannot be repaired into a valid array.
+    expect(() =>
+      _internal.coerceDraft(permissive({ selections: 'not-an-array-and-no-brackets' }) as never),
+    ).toThrow(/schema validation/);
+  });
+
+  it('DRIFT C: a whole field OMITTED by the model → strict-parse failure (retryable), not a client crash', () => {
+    // Observed live: sonnet sometimes emits an incomplete tool call missing an
+    // entire field (e.g. `tradeoffs`). The permissive client schema accepts the
+    // omission (undefined) so it does NOT throw a client-side GenerationError;
+    // coerceDraft then rejects it as a retryable strict-parse failure.
+    const withoutTradeoffs = permissive({});
+    delete (withoutTradeoffs as Record<string, unknown>).tradeoffs;
+    expect(() => _internal.coerceDraft(withoutTradeoffs as never)).toThrow(/schema validation/);
+  });
+
+  it('DRIFT D: the model leaked the WHOLE tool call into one field → sibling fields recovered', () => {
+    // The worst observed shape: the model dumps every parameter as tool XML into
+    // `assumptions`, leaving `selections`/`tradeoffs` undefined. recoverLeakedFields
+    // pulls each sibling back out of the leaked blob — turning a retry into a
+    // first-attempt success with the model's OWN content.
+    const leakedBlob =
+      '\n<parameter name="assumptions">["Defaulted the relational engine to PostgreSQL."]' +
+      '\n<parameter name="selections">[{"provider":"aws","choices":[{"role":"compute-web","serviceId":"aws:ec2","skuId":"aws:ec2:t3-medium","units":1,"enabled":true}]}]' +
+      '\n<parameter name="tradeoffs">[{"provider":"aws","pros":["Broad catalog"],"cons":["Steeper learning curve"]}]';
+    const drifted = {
+      recommendedProvider: 'aws',
+      rationale:
+        'At medium scale on a startup budget, AWS offers a broad managed catalog and predictable RDS pricing for this workload.',
+      assumptions: leakedBlob,
+      selections: undefined,
+      tradeoffs: undefined,
+    };
+    const draft = _internal.coerceDraft(drifted as never);
+    expect(draft.assumptions).toEqual(['Defaulted the relational engine to PostgreSQL.']);
+    expect(draft.selections[0].provider).toBe('aws');
+    expect(draft.selections[0].choices[0].serviceId).toBe('aws:ec2');
+    expect(draft.tradeoffs[0].provider).toBe('aws');
+    expect(draft.tradeoffs[0].pros).toEqual(['Broad catalog']);
+  });
+
+  it('recoverLeakedFields never overwrites a field that already has a good value', () => {
+    const goodSelections = [
+      { provider: 'gcp', choices: [{ role: 'compute-web', serviceId: 'gcp:cloud-run', skuId: 'gcp:cloud-run:std', units: 1, enabled: true }] },
+    ];
+    const recovered = _internal.recoverLeakedFields({
+      recommendedProvider: 'aws',
+      rationale: 'x',
+      assumptions: '\n<parameter name="selections">[{"provider":"aws","choices":[]}]',
+      selections: goodSelections,
+      tradeoffs: [{ provider: 'aws', pros: ['a'], cons: ['b'] }],
+    } as never) as { selections: unknown };
+    // The already-good selections must be preserved, not clobbered by the leak.
+    expect(recovered.selections).toBe(goodSelections);
+  });
+
+  it('DRIFT E: array elements arrive as JSON-object STRINGS → each element decoded', () => {
+    // Observed live (small PRD): the outer arrays are real, but each ITEM is a
+    // JSON-encoded object string — surfacing as `tradeoffs.0: expected object,
+    // received string` and `selections.0.choices: expected array, received
+    // undefined`. decodeObjectArrayField decodes each element.
+    const draft = _internal.coerceDraft(
+      permissive({
+        selections: [
+          JSON.stringify({
+            provider: 'aws',
+            choices: [
+              { role: 'compute-web', serviceId: 'aws:ec2', skuId: 'aws:ec2:t3-medium', units: 1, enabled: true },
+            ],
+          }),
+        ],
+        tradeoffs: [JSON.stringify({ provider: 'aws', pros: ['fast'], cons: ['pricey'] })],
+      }) as never,
+    );
+    expect(draft.selections[0].provider).toBe('aws');
+    expect(draft.selections[0].choices[0].serviceId).toBe('aws:ec2');
+    expect(draft.tradeoffs[0].provider).toBe('aws');
+    expect(draft.tradeoffs[0].pros).toEqual(['fast']);
+  });
+
+  it('clampString is a no-op under the cap and ellipsises over it', () => {
+    expect(_internal.clampString('short', 300)).toBe('short');
+    const clamped = _internal.clampString('x'.repeat(500), 300);
+    expect(clamped.length).toBeLessThanOrEqual(300);
+    expect(clamped.endsWith('…')).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* BLOCKER-4: retry policy — truncation vs serialisation drift                */
+/* -------------------------------------------------------------------------- */
+
+describe('recommendDeployment — retry policy (BLOCKER-4)', () => {
+  it('does NOT retry a truncation at the same budget — retries ONCE at a raised budget', async () => {
+    // First call truncates (max_tokens); the raised-budget retry succeeds.
+    const truncErr = new GenerationError(
+      'invalid_output',
+      'Output truncated at max_tokens (8192); the structured JSON is incomplete.',
+      { truncated: true },
+    );
+    mockCall.mockRejectedValueOnce(truncErr).mockResolvedValueOnce(awsDraft());
+
+    const rec = await recommendDeployment(context, serviceCatalog);
+    expect(costRecommendationSchema.safeParse(rec).success).toBe(true);
+
+    // Exactly two calls: the truncation, then the raised-budget retry.
+    expect(mockCall).toHaveBeenCalledTimes(2);
+    const firstBudget = mockCall.mock.calls[0][0].maxTokens;
+    const retryBudget = mockCall.mock.calls[1][0].maxTokens;
+    expect(retryBudget).toBeGreaterThan(firstBudget);
+  });
+
+  it('fails FAST when the raised-budget retry ALSO truncates — no third call', async () => {
+    const truncErr = () =>
+      new GenerationError('invalid_output', 'Output truncated at max_tokens', { truncated: true });
+    mockCall.mockRejectedValueOnce(truncErr()).mockRejectedValueOnce(truncErr());
+
+    const err = (await recommendDeployment(context, serviceCatalog).catch((e) => e)) as {
+      name?: string;
+      code?: string;
+    };
+    expect(err.name).toBe('PricingError');
+    expect(err.code).toBe('invalid_output');
+    // Truncation (1) + one raised-budget retry (2) = 2 calls, then fail fast.
+    expect(mockCall).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries serialisation drift at the SAME budget then succeeds', async () => {
+    // A coerceDraft failure surfaces as a strict-parse PricingError inside the
+    // loop. Simulate it by returning an unrepairable draft once, then a good one.
+    mockCall
+      .mockResolvedValueOnce({ recommendedProvider: 'aws', rationale: 'x', assumptions: 'not-an-array-no-brackets', selections: 'bad', tradeoffs: 'bad' } as never)
+      .mockResolvedValueOnce(awsDraft());
+
+    const rec = await recommendDeployment(context, serviceCatalog);
+    expect(costRecommendationSchema.safeParse(rec).success).toBe(true);
+    expect(mockCall).toHaveBeenCalledTimes(2);
+    // Both attempts used the SAME (base) budget — drift is not a budget problem.
+    expect(mockCall.mock.calls[0][0].maxTokens).toBe(mockCall.mock.calls[1][0].maxTokens);
+  });
+
+  it('does NOT retry not_configured — fails on the first call', async () => {
+    mockCall.mockRejectedValueOnce(new GenerationError('not_configured', 'no key'));
+    const err = (await recommendDeployment(context, serviceCatalog).catch((e) => e)) as {
+      code?: string;
+    };
+    expect(err.code).toBe('not_configured');
+    expect(mockCall).toHaveBeenCalledTimes(1);
   });
 });

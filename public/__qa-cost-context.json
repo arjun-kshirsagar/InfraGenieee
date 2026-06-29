@@ -1,0 +1,39 @@
+{
+  "title": "ColdWatch — cold-chain IoT telemetry & alerting platform",
+  "context": {
+    "userScale": "large",
+    "trafficPattern": "spiky",
+    "budgetBand": "growth",
+    "timelineWeeks": 20,
+    "constraints": "Must retain 90 days of raw sensor telemetry; sub-minute alerting SLA; some customers require EU data residency."
+  },
+  "components": [
+    { "name": "Operator dashboard", "kind": "client", "responsibility": "Real-time fleet map, alert triage, and reporting UI for logistics operators", "technology": "Next.js" },
+    { "name": "Ingest gateway", "kind": "service", "responsibility": "Terminates MQTT/HTTPS from field sensors, authenticates devices, and publishes readings", "technology": "Node.js / Fastify" },
+    { "name": "Telemetry bus", "kind": "queue", "responsibility": "Durable, partitioned stream buffering millions of sensor readings for downstream consumers", "technology": "Apache Kafka" },
+    { "name": "Stream processor", "kind": "service", "responsibility": "Consumes the telemetry bus, computes rolling aggregates, and evaluates alert rules", "technology": "Node.js worker" },
+    { "name": "Alert dispatcher", "kind": "service", "responsibility": "Fans out breach alerts to SMS/email/webhook and tracks acknowledgements", "technology": "Node.js" },
+    { "name": "Primary database", "kind": "datastore", "responsibility": "Devices, customers, alert rules, acknowledgements, and 90-day rolled-up metrics", "technology": "PostgreSQL" },
+    { "name": "Hot cache", "kind": "cache", "responsibility": "Latest-reading-per-device and rule-evaluation state for sub-minute alerting", "technology": "Redis" },
+    { "name": "Cold telemetry store", "kind": "datastore", "responsibility": "Raw 90-day sensor telemetry archive for audit and replay", "technology": "Object storage (S3-compatible)" },
+    { "name": "Report exports", "kind": "datastore", "responsibility": "Generated PDF/CSV compliance reports available for download", "technology": "Object storage" },
+    { "name": "Static & report CDN", "kind": "cdn", "responsibility": "Serves the dashboard bundle and cached report downloads close to operators", "technology": "CDN" },
+    { "name": "Public API", "kind": "service", "responsibility": "Customer-facing REST API for device provisioning and metric queries", "technology": "Node.js" },
+    { "name": "Payment provider", "kind": "external", "responsibility": "Subscription billing and metered overage invoicing", "technology": "Stripe" }
+  ],
+  "infrastructure": {
+    "hosting": "Container platform with autoscaling for the ingest and processing tier",
+    "database": "Managed PostgreSQL with a read replica for reporting",
+    "cache": "Managed Redis for hot state and rule evaluation",
+    "storage": "S3-compatible object storage for raw telemetry and report exports",
+    "cicd": "GitHub Actions pipeline with staging and production environments",
+    "environments": ["staging", "production"],
+    "rationale": [
+      "Spiky ingest at large scale needs a partitioned durable bus (Kafka) so a sensor storm cannot drop readings.",
+      "Sub-minute alerting SLA demands an in-memory hot cache for latest-per-device state.",
+      "90-day raw retention is cheapest on object storage, keeping the relational DB to rolled-up metrics.",
+      "EU data-residency constraint favours providers with an EU region for the datastore and object store."
+    ]
+  },
+  "summary": "ColdWatch ingests high-volume cold-chain sensor telemetry, evaluates breach rules in near-real-time, dispatches alerts, and retains 90 days of raw readings for audit — a large, spiky, growth-budget IoT workload spanning ingest, streaming, relational, cache, object storage, and CDN roles."
+}

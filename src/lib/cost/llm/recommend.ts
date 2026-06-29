@@ -381,9 +381,32 @@ const RECOMMEND_JSON_SCHEMA: Record<string, unknown> = {
   },
 };
 
-/** Budget for the tool output. A five-provider recommendation with rationale,
- *  assumptions, per-provider selections and trade-offs is a few KB of JSON. */
-const MAX_OUTPUT_TOKENS = 4096;
+/**
+ * Budget for the tool output.
+ *
+ * MEASURED, not guessed (2026-07-26, `claude-sonnet-5`, production prompt size
+ * — the 12-component ColdWatch context at `input_tokens≈8300`): a full
+ * five-provider recommendation (rationale + assumptions + one selection per
+ * provider + per-provider trade-offs) emits ~4200–4900 `output_tokens` and
+ * serialises to ~10–11 KB of JSON. The old 4096 cap truncated EVERY full
+ * recommendation (`output_tokens` pinned at exactly 4096, then a 500) — that
+ * was the root of BLOCKER-4 Mode A.
+ *
+ * 8192 gives ≈1.7× headroom over the observed ~4900 ceiling, covering the
+ * worst case (10 assumptions + 5 pros/5 cons at the 240-char cap) without
+ * paying for tokens the stage never emits.
+ */
+const MAX_OUTPUT_TOKENS = 8192;
+
+/**
+ * Raised budget for the SINGLE truncation retry. A truncation is deterministic
+ * for a given input — retrying at the same budget can only truncate again — so
+ * the one truncation retry is done at a strictly higher budget. 16384 is the
+ * Anthropic sonnet ceiling for this shape and leaves ~3× headroom; if even this
+ * truncates, the output is genuinely oversized and we fail fast rather than
+ * burn more calls.
+ */
+const RETRY_MAX_OUTPUT_TOKENS = 16384;
 
 /**
  * The schema handed to `callStructured` is deliberately PERMISSIVE: forced-tool
@@ -399,38 +422,142 @@ const MAX_OUTPUT_TOKENS = 4096;
  * fix cosmetic serialisation first rather than discarding good output over it.
  */
 const permissiveDraftSchema = z.object({
-  recommendedProvider: z.string(),
-  rationale: z.string(),
-  // Fully permissive on the array fields: the client parse must NEVER reject on
-  // shape here (forced-tool models emit these as arrays, JSON-string arrays, or
-  // prose strings). `coerceDraft` normalises and then enforces the strict
-  // contract, and a coerceDraft failure is a `PricingError` the retry loop can
-  // see — a client-side GenerationError would bypass that loop.
-  assumptions: z.unknown(),
-  selections: z.unknown(),
-  tradeoffs: z.unknown(),
+  // EVERY field is optional here so the client-side parse in `callStructured`
+  // NEVER rejects on shape — not on a JSON-string array, not on a prose string,
+  // and not on a whole field the model OMITTED (all three observed live with
+  // sonnet under a long prompt). NOTE: in Zod v4 a bare `z.unknown()` STILL
+  // rejects a MISSING key ("expected nonoptional, received undefined"), so each
+  // field must be explicitly `.optional()` — that omission is exactly the drift
+  // that produced a client-side `GenerationError` and bypassed the retry loop.
+  // `coerceDraft` normalises what it can and then the STRICT
+  // `costRecommendationDraftSchema` is the single real gate: its failure is a
+  // `PricingError('invalid_output')` the retry loop treats as serialisation
+  // drift and retries.
+  recommendedProvider: z.unknown().optional(),
+  rationale: z.unknown().optional(),
+  assumptions: z.unknown().optional(),
+  selections: z.unknown().optional(),
+  tradeoffs: z.unknown().optional(),
 });
 
 type PermissiveDraft = z.infer<typeof permissiveDraftSchema>;
 
-/** Decode a field that may be a JSON-encoded array string into a real array. */
-function decodeArrayField(val: unknown): unknown {
-  if (typeof val !== 'string') return val;
-  try {
-    const parsed = JSON.parse(val);
-    return Array.isArray(parsed) ? parsed : val;
-  } catch {
-    return val;
-  }
+/** Max lengths from the strict contract (`costRecommendationDraftSchema`). We
+ *  clamp to these rather than letting an over-long model string trip the parse
+ *  and burn a retry — the text is the model's own, just trimmed to the cap. */
+const ASSUMPTION_MAX = 300;
+const TRADEOFF_ITEM_MAX = 240;
+
+/** Truncate a string to `max` chars, appending an ellipsis so the clamp is
+ *  visible rather than a silent mid-word cut. No-op when already within the cap. */
+function clampString(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 1).trimEnd()}…`;
 }
 
 /**
- * Like `decodeArrayField`, but for a STRING-array field (`assumptions`): if the
- * model emitted a single prose string rather than an array — observed reliably
- * with sonnet under a long prompt — wrap it as a one-element array (splitting on
- * newlines/semicolons if it clearly enumerates several). This is not fabrication:
- * it is the model's own text, just re-shaped from a string into the `string[]`
- * the contract asks for. A real JSON-array string is still decoded first.
+ * Pull the first balanced JSON array out of a string that may be wrapped in
+ * junk. Observed live (sonnet, forced tool, long prompt): the model leaks the
+ * tool-call XML into a field VALUE, e.g.
+ *
+ *     "\n<parameter name=\"assumptions\">[\"Defaulted…\", \"Assumed…\"]"
+ *
+ * so the field is a string whose `[...]` payload is real JSON but preceded (and
+ * sometimes followed) by non-JSON text. `JSON.parse` on the whole thing fails;
+ * this finds the `[` … matching `]` span, respecting string literals and
+ * escapes, and returns the decoded array. Returns `null` when there is no
+ * decodable array — the caller then leaves the value untouched for the strict
+ * schema to reject honestly.
+ */
+function extractJsonArray(str: string): unknown[] | null {
+  const start = str.indexOf('[');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < str.length; i++) {
+    const ch = str[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      if (inString) escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '[') depth++;
+    else if (ch === ']') {
+      depth--;
+      if (depth === 0) {
+        const candidate = str.slice(start, i + 1);
+        try {
+          const parsed = JSON.parse(candidate);
+          return Array.isArray(parsed) ? parsed : null;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Decode a field that should be an array but may arrive as a real array, a
+ * JSON-encoded array string, or a string with the array embedded in tool-XML
+ * junk (see `extractJsonArray`). Returns the value untouched when it cannot be
+ * turned into an array — the strict schema then rejects it honestly.
+ */
+function decodeArrayField(val: unknown): unknown {
+  if (Array.isArray(val)) return val;
+  if (typeof val !== 'string') return val;
+  // 1. Whole string is clean JSON.
+  try {
+    const parsed = JSON.parse(val);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // fall through to embedded-array extraction
+  }
+  // 2. Array embedded in wrapper junk (the observed XML-leak shape).
+  const extracted = extractJsonArray(val);
+  return extracted ?? val;
+}
+
+/**
+ * Like `decodeArrayField`, but for an OBJECT-array field (`selections`,
+ * `tradeoffs`): after decoding the outer array, decode any ELEMENT that is
+ * itself a JSON-encoded object string — the nested serialisation drift observed
+ * live where the array is real but each item arrives as `"{...}"` (surfacing as
+ * `tradeoffs.0: expected object, received string` /
+ * `selections.0.choices: expected array, received undefined`). Elements that are
+ * not decodable object-strings pass through for the strict schema to judge.
+ */
+function decodeObjectArrayField(val: unknown): unknown {
+  const decoded = decodeArrayField(val);
+  if (!Array.isArray(decoded)) return decoded;
+  return decoded.map((item) => {
+    if (typeof item !== 'string') return item;
+    try {
+      const parsed = JSON.parse(item);
+      return parsed && typeof parsed === 'object' ? parsed : item;
+    } catch {
+      return item;
+    }
+  });
+}
+
+/**
+ * Like `decodeArrayField`, but for the STRING-array field (`assumptions`): after
+ * array-decoding, if the model emitted a single prose string rather than an
+ * array — observed with sonnet under a long prompt — wrap it as a one-element
+ * array (splitting on newlines/semicolons if it clearly enumerates several).
+ * This is not fabrication: it is the model's own text, re-shaped from a string
+ * into the `string[]` the contract asks for.
  */
 function decodeStringArrayField(val: unknown): unknown {
   const decoded = decodeArrayField(val);
@@ -448,19 +575,109 @@ function decodeStringArrayField(val: unknown): unknown {
   return decoded;
 }
 
+/** Clamp every string entry of a decoded string[] to `max`. Non-arrays and
+ *  non-string entries pass through untouched for the strict schema to judge. */
+function clampStringArray(val: unknown, max: number): unknown {
+  if (!Array.isArray(val)) return val;
+  return val.map((item) => (typeof item === 'string' ? clampString(item, max) : item));
+}
+
+/** Clamp the pros/cons string arrays inside a decoded tradeoffs[] so over-long
+ *  model prose is trimmed to the 240-char contract rather than rejected. */
+function clampTradeoffs(val: unknown): unknown {
+  if (!Array.isArray(val)) return val;
+  return val.map((entry) => {
+    if (!entry || typeof entry !== 'object') return entry;
+    const e = entry as Record<string, unknown>;
+    return {
+      ...e,
+      pros: clampStringArray(e.pros, TRADEOFF_ITEM_MAX),
+      cons: clampStringArray(e.cons, TRADEOFF_ITEM_MAX),
+    };
+  });
+}
+
 /**
- * Coerce a permissive draft into the strict `CostRecommendationDraft` shape,
- * decoding any JSON-string arrays first. Throws `PricingError('invalid_output')`
- * if the result still fails the strict schema (a genuinely malformed output, not
- * mere serialisation drift).
+ * Recover fields the model leaked as tool XML into ANOTHER field's value.
+ *
+ * The worst observed drift (sonnet, forced tool, long prompt) is the model
+ * dumping the REST of the tool call as text into one field, e.g. `assumptions`
+ * arrives as:
+ *
+ *   "\n<parameter name=\"assumptions\">[...]\n<parameter name=\"selections\">[...]"
+ *
+ * When that happens the sibling fields (`selections`, `tradeoffs`) come back
+ * `undefined`. Rather than burn a retry, scan every string value for
+ * `<parameter name="FIELD">` markers and, for any field we don't already have a
+ * usable value for, pull its payload out of the leaked blob. Purely a re-shape
+ * of the model's own output — no invented content. Returns a shallow-updated
+ * copy; fields already present are never overwritten.
  */
-function coerceDraft(raw: PermissiveDraft): CostRecommendationDraft {
+function recoverLeakedFields(raw: PermissiveDraft): PermissiveDraft {
+  const FIELDS = ['recommendedProvider', 'rationale', 'assumptions', 'selections', 'tradeoffs'] as const;
+  const out: Record<string, unknown> = { ...raw };
+
+  // Find any string value that carries `<parameter name="...">` markers.
+  const blobs = FIELDS.map((f) => out[f]).filter(
+    (v): v is string => typeof v === 'string' && v.includes('<parameter name='),
+  );
+  if (blobs.length === 0) return raw;
+
+  for (const blob of blobs) {
+    for (const field of FIELDS) {
+      // Only fill fields we don't already have a non-string (already-decoded) or
+      // non-empty value for. A leaked string field is itself a candidate to be
+      // REPLACED by its own extracted payload.
+      const current = out[field];
+      const alreadyGood =
+        current !== undefined &&
+        current !== null &&
+        !(typeof current === 'string' && current.includes('<parameter name='));
+      if (alreadyGood) continue;
+
+      const marker = `<parameter name="${field}">`;
+      const at = blob.indexOf(marker);
+      if (at === -1) continue;
+      const after = blob.slice(at + marker.length);
+
+      // Array-shaped fields: pull the balanced [...] that follows.
+      if (field === 'assumptions' || field === 'selections' || field === 'tradeoffs') {
+        const arr = extractJsonArray(after);
+        if (arr) out[field] = arr;
+        continue;
+      }
+      // Scalar fields (recommendedProvider / rationale): take up to the next
+      // `<parameter` marker or end, trimmed of stray quotes/whitespace.
+      const end = after.indexOf('<parameter name=');
+      const rawVal = (end === -1 ? after : after.slice(0, end)).trim().replace(/^"|"$/g, '');
+      if (rawVal.length > 0) out[field] = rawVal;
+    }
+  }
+  return out as PermissiveDraft;
+}
+
+/**
+ * Coerce a permissive draft into the strict `CostRecommendationDraft` shape.
+ *
+ * Order of repair (all cosmetic — never invents content):
+ *   0. Recover any sibling fields the model leaked as tool XML into one field.
+ *   1. Decode array fields that arrived as JSON strings or XML-wrapped strings.
+ *   2. Clamp over-long strings to their contract cap (assumptions ≤300,
+ *      trade-off pros/cons ≤240) — a model that wrote 310 chars should not cost
+ *      a paid retry.
+ * Then the strict `costRecommendationDraftSchema` is the real gate. A failure
+ * after repair is a genuinely malformed output, thrown as
+ * `PricingError('invalid_output')` (which the retry loop can see).
+ */
+function coerceDraft(rawIn: PermissiveDraft): CostRecommendationDraft {
+  const raw = recoverLeakedFields(rawIn);
   const candidate = {
     recommendedProvider: raw.recommendedProvider,
-    rationale: raw.rationale,
-    assumptions: decodeStringArrayField(raw.assumptions),
-    selections: decodeArrayField(raw.selections),
-    tradeoffs: decodeArrayField(raw.tradeoffs),
+    rationale:
+      typeof raw.rationale === 'string' ? clampString(raw.rationale, 1200) : raw.rationale,
+    assumptions: clampStringArray(decodeStringArrayField(raw.assumptions), ASSUMPTION_MAX),
+    selections: decodeObjectArrayField(raw.selections),
+    tradeoffs: clampTradeoffs(decodeObjectArrayField(raw.tradeoffs)),
   };
   const parsed = costRecommendationDraftSchema.safeParse(candidate);
   if (!parsed.success) {
@@ -561,12 +778,20 @@ export const recommendDeployment: RecommendDeployment = async (
   const providers = index.providersPresent();
   const model = options?.model ?? DEFAULT_RECOMMEND_MODEL;
 
-  // 2. ONE structured call (with at most ONE bounded retry on serialisation
-  //    drift — no loop). Reuse the PRD client — no second Anthropic client. The
-  //    permissive schema never rejects on a JSON-string array; `coerceDraft`
-  //    decodes those and enforces the STRICT contract. A retry is attempted only
-  //    when the first output failed the strict parse (`invalid_output`), which
-  //    is the intermittent forced-tool drift, and the retry is hard-capped at 1.
+  // 2. ONE structured call, with a SMALL bounded set of retries whose policy
+  //    depends on WHY the attempt failed — never an unbounded loop:
+  //      • serialisation drift  (coerceDraft `PricingError('invalid_output')`):
+  //        the SAME-budget output was merely mis-shaped; `coerceDraft` already
+  //        repairs the common cases, so a retry at the same budget is worth ONE
+  //        shot at fresh sampling.
+  //      • truncation (`max_tokens`): DETERMINISTIC for a given input — retrying
+  //        at the same budget can only truncate again (the Mode-A waste this
+  //        blocker is about). Retried EXACTLY ONCE at a strictly higher budget;
+  //        if that still truncates, fail fast.
+  //      • not_configured / unavailable / abort: never retried here.
+  //    Reuse the PRD client — no second Anthropic client. The permissive schema
+  //    never rejects on a JSON-string array; `coerceDraft` decodes those and
+  //    enforces the STRICT contract.
   const userMessage = [
     buildContextBlock(costContext, requiredRoles),
     '',
@@ -584,7 +809,7 @@ export const recommendDeployment: RecommendDeployment = async (
   /** Hard cap on total attempts (1 initial + up to 2 retries). No unbounded loop. */
   const MAX_ATTEMPTS = 3;
 
-  const callOnce = async (): Promise<CostRecommendationDraft> => {
+  const callOnce = async (maxTokens: number): Promise<CostRecommendationDraft> => {
     const raw = await callStructured<PermissiveDraft>({
       model,
       system: SYSTEM_PROMPT,
@@ -594,7 +819,7 @@ export const recommendDeployment: RecommendDeployment = async (
         'Emit the deployment recommendation: recommended provider, brief-grounded rationale, assumptions, one seeded selection per runnable provider, and honest per-provider trade-offs.',
       jsonSchema: RECOMMEND_JSON_SCHEMA,
       schema: permissiveDraftSchema,
-      maxTokens: MAX_OUTPUT_TOKENS,
+      maxTokens,
       signal: options?.signal,
       // `stage` is a fixed PRD-generation union; omit it so `callStructured`
       // labels logs with the toolName instead.
@@ -603,36 +828,75 @@ export const recommendDeployment: RecommendDeployment = async (
     return coerceDraft(raw);
   };
 
+  /** Did this error come from `max_tokens` truncation (raw GenerationError from
+   *  the client, or a PricingError that carried the flag through)? */
+  const isTruncation = (e: unknown): boolean =>
+    (e instanceof GenerationError && e.truncated === true) ||
+    (e instanceof PricingError && e.truncated === true);
+
+  /** Did this error come from a strict-parse failure (serialisation drift) that
+   *  is NOT a truncation — i.e. worth one same-budget retry? Covers both the
+   *  `coerceDraft` `PricingError` and any residual client-side
+   *  `GenerationError('invalid_output')` (the permissive schema makes the latter
+   *  rare, but a non-tool_use response can still surface one). */
+  const isSerialisationDrift = (e: unknown): boolean =>
+    !isTruncation(e) &&
+    ((e instanceof PricingError && e.code === 'invalid_output') ||
+      (e instanceof GenerationError && e.code === 'invalid_output'));
+
   let draft: CostRecommendationDraft;
   try {
     let lastErr: unknown;
-    let done = false;
-    // Bounded attempts: retry ONLY on strict-parse failure (serialisation drift).
-    // not_configured / unavailable / abort are never retried here.
     let attemptDraft: CostRecommendationDraft | undefined;
+    // Once we have retried the deterministic truncation at the raised budget,
+    // never retry it again (a second truncation means genuinely oversized output).
+    let raisedBudgetTried = false;
+
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const budget = raisedBudgetTried ? RETRY_MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS;
       try {
-        attemptDraft = await callOnce();
-        done = true;
+        attemptDraft = await callOnce(budget);
         break;
       } catch (attemptErr) {
         lastErr = attemptErr;
-        const retryable =
-          attemptErr instanceof PricingError && attemptErr.code === 'invalid_output';
-        if (!retryable || options?.signal?.aborted || attempt === MAX_ATTEMPTS - 1) throw attemptErr;
-        console.info(
-          '[cost.recommend] retrying after invalid_output (serialisation drift), attempt=%d',
-          attempt + 1,
-        );
+        if (options?.signal?.aborted || attempt === MAX_ATTEMPTS - 1) throw attemptErr;
+
+        if (isTruncation(attemptErr)) {
+          if (raisedBudgetTried) {
+            // Already retried at the raised budget and STILL truncated — the
+            // output is genuinely too big for this stage. Fail fast; do not
+            // burn another paid call that cannot succeed.
+            throw attemptErr;
+          }
+          raisedBudgetTried = true;
+          console.info(
+            '[cost.recommend] output truncated at maxTokens=%d; retrying ONCE at raised budget=%d',
+            MAX_OUTPUT_TOKENS,
+            RETRY_MAX_OUTPUT_TOKENS,
+          );
+          continue;
+        }
+
+        if (isSerialisationDrift(attemptErr)) {
+          console.info(
+            '[cost.recommend] retrying after invalid_output (serialisation drift), attempt=%d',
+            attempt + 1,
+          );
+          continue;
+        }
+
+        // not_configured / unavailable / any other error: not retryable here.
+        throw attemptErr;
       }
     }
-    if (!done || !attemptDraft) throw lastErr;
+    if (!attemptDraft) throw lastErr;
     draft = attemptDraft;
   } catch (err) {
     // A coerceDraft failure is already a PricingError — pass it through.
     if (err instanceof PricingError) throw err;
     // Map the PRD generation error taxonomy onto the pricing one so callers only
-    // ever handle `PricingError`. The underlying cause is preserved for logs.
+    // ever handle `PricingError`. The underlying cause (and the truncation flag)
+    // is preserved for logs and the route's status mapping.
     if (err instanceof GenerationError) {
       const code =
         err.code === 'not_configured'
@@ -640,7 +904,10 @@ export const recommendDeployment: RecommendDeployment = async (
           : err.code === 'invalid_output'
             ? 'invalid_output'
             : 'unavailable';
-      throw new PricingError(code, `Cost recommendation failed: ${err.message}`, { cause: err });
+      throw new PricingError(code, `Cost recommendation failed: ${err.message}`, {
+        cause: err,
+        truncated: err.truncated,
+      });
     }
     throw new PricingError('unavailable', 'Cost recommendation failed with an unexpected error.', {
       cause: err,
@@ -751,4 +1018,12 @@ export const _internal = {
   buildCatalogMenu,
   pickFallbackProvider,
   dedupeCap,
+  coerceDraft,
+  recoverLeakedFields,
+  decodeArrayField,
+  decodeStringArrayField,
+  extractJsonArray,
+  clampString,
+  clampStringArray,
+  clampTradeoffs,
 };

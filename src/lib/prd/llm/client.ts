@@ -245,7 +245,7 @@ function extractAndValidate<T>(
       'invalid_output',
       `Output truncated at max_tokens (${opts.maxTokens}); the structured JSON is incomplete. ` +
         'Raise maxTokens for this stage or reduce what it must emit.',
-      { stage },
+      { stage, truncated: true },
     );
   }
 

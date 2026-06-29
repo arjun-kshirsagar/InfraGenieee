@@ -58,16 +58,26 @@ export class GenerationError extends Error {
   readonly code: GenerationErrorCode;
   /** Which pipeline stage failed, for logs and metrics. */
   readonly stage?: 'clarify' | 'title' | 'prd' | 'architecture' | 'plan';
+  /**
+   * True ONLY for an `invalid_output` caused by hitting `max_tokens` (the tool
+   * JSON was cut off). Callers use this to decide retry policy: retrying a
+   * truncation at the SAME budget is deterministic waste — it can only be
+   * retried with a larger budget, or must fail fast. Serialisation drift (the
+   * other `invalid_output` cause) is worth a same-budget retry; truncation is
+   * not. See `src/lib/cost/llm/recommend.ts`.
+   */
+  readonly truncated?: boolean;
 
   constructor(
     code: GenerationErrorCode,
     message: string,
-    options?: { stage?: GenerationError['stage']; cause?: unknown },
+    options?: { stage?: GenerationError['stage']; cause?: unknown; truncated?: boolean },
   ) {
     super(message, { cause: options?.cause });
     this.name = 'GenerationError';
     this.code = code;
     this.stage = options?.stage;
+    this.truncated = options?.truncated;
   }
 }
 
