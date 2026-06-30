@@ -38,8 +38,11 @@ import {
   type ClarifyQuestion,
 } from '@/types/prd';
 
+import { z } from 'zod';
+
 import { callStructured } from '@/lib/prd/llm/client';
-import { DEFAULT_CLARIFY_MODEL } from '@/lib/prd/generation';
+import { clampStringsToSchema } from '@/lib/prd/llm/normalize';
+import { DEFAULT_CLARIFY_MODEL, GenerationError } from '@/lib/prd/generation';
 
 /* -------------------------------------------------------------------------- */
 /* Model selection                                                            */
@@ -231,7 +234,14 @@ export async function runClarifyStage(
 ): Promise<ClarifyQuestion[]> {
   const model = resolveClarifyModel(options?.model);
 
-  const { questions } = await callStructured({
+  // Get the RAW model output (validate only the wire shape via callStructured's
+  // internal parse, using an always-pass schema), then clamp any free-text field
+  // the model wrote over its `.max()` cap (`why` max 200, `suggestions` items max
+  // 120) to the cap BEFORE the real zod parse. Without this a slightly-verbose
+  // `why` discards the whole clarify call — the same overflow bug the generation
+  // stages hit (t_fd71a759). Clamp is schema-driven, so it stays correct if the
+  // caps change.
+  const raw = await callStructured<unknown>({
     model,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: buildClarifyUserMessage(idea, context) }],
@@ -239,11 +249,23 @@ export async function runClarifyStage(
     toolDescription:
       'Emit the adaptive clarifying questions (an empty array is valid and preferred).',
     jsonSchema: CLARIFY_TOOL_JSON_SCHEMA,
-    schema: clarifyResponseSchema,
+    schema: z.unknown(),
     maxTokens: CLARIFY_MAX_TOKENS,
     stage: 'clarify',
     signal: options?.signal,
   });
 
-  return questions;
+  const clamped = clampStringsToSchema(clarifyResponseSchema, raw);
+  const parsed = clarifyResponseSchema.safeParse(clamped);
+  if (!parsed.success) {
+    throw new GenerationError(
+      'invalid_output',
+      `Clarify stage output failed schema validation: ${parsed.error.issues
+        .map((i) => `${i.path.map(String).join('.') || '<root>'}: ${i.message}`)
+        .join('; ')}`,
+      { stage: 'clarify' },
+    );
+  }
+
+  return parsed.data.questions;
 }

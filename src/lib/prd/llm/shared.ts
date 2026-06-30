@@ -31,6 +31,7 @@ import {
   BUDGET_BAND_LABEL,
 } from '@/types/prd';
 import { callStructured } from '@/lib/prd/llm/client';
+import { clampStringsToSchema } from '@/lib/prd/llm/normalize';
 import { GenerationError, type GenerationError as GenerationErrorType } from '@/lib/prd/generation';
 
 /* -------------------------------------------------------------------------- */
@@ -407,8 +408,17 @@ export interface RunStageOptions<T> {
  */
 export async function runStage<T>(opts: RunStageOptions<T>): Promise<T> {
   const jsonSchema = toInputSchema(opts.schema);
-  // Deterministic pre-validation repair (identity when the stage supplies none).
-  const repair = opts.repair ?? ((raw: unknown) => raw);
+  // Deterministic pre-validation repair, applied to the RAW model output before
+  // every safeParse. TWO layers, composed:
+  //   1. Schema-driven length clamp (ALWAYS on) — truncate any model-generated
+  //      free-text string that overflowed its `.max()` cap, so a verbose but
+  //      otherwise-good generation isn't discarded over a few extra characters.
+  //      Covers every capped field in every stage automatically (t_fd71a759).
+  //   2. The stage's own optional repair (e.g. relationship-kind enum mapping).
+  // Clamp first, then the stage repair, then validate.
+  const stageRepair = opts.repair ?? ((raw: unknown) => raw);
+  const repair = (raw: unknown): unknown =>
+    stageRepair(clampStringsToSchema(opts.schema, raw));
 
   // First attempt — get the raw tool_use.input without letting callStructured's
   // own zod gate collapse under-volume and structural failures together.

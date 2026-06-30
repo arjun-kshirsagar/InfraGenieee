@@ -9,13 +9,21 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import {
   normalizeRelationshipKind,
   repairArchitectureRelationshipKinds,
+  clampString,
+  clampStringsToSchema,
   RELATIONSHIP_KINDS,
 } from '@/lib/prd/llm/normalize';
-import { relationshipSchema, architectureDraftSchema } from '@/types/prd';
+import {
+  relationshipSchema,
+  architectureDraftSchema,
+  clarifyResponseSchema,
+  entitySchema,
+} from '@/types/prd';
 
 /* -------------------------------------------------------------------------- */
 /* normalizeRelationshipKind                                                  */
@@ -172,5 +180,176 @@ describe('repairArchitectureRelationshipKinds', () => {
     expect(repairArchitectureRelationshipKinds({ dataModel: {} })).toEqual({ dataModel: {} });
     const noRel = { dataModel: { relationships: 'nope' } };
     expect(repairArchitectureRelationshipKinds(noRel)).toBe(noRel);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* clampString                                                                */
+/* -------------------------------------------------------------------------- */
+
+describe('clampString', () => {
+  it('returns a compliant string byte-for-byte (no ellipsis, no change)', () => {
+    expect(clampString('short', 200)).toBe('short');
+    const exact = 'x'.repeat(50);
+    expect(clampString(exact, 50)).toBe(exact);
+  });
+
+  it('truncates an over-long string to at most `max` characters', () => {
+    const long = 'word '.repeat(100).trim(); // ~499 chars
+    const out = clampString(long, 200);
+    expect([...out].length).toBeLessThanOrEqual(200);
+  });
+
+  it('appends an ellipsis when it truncates (and it counts toward the cap)', () => {
+    const long = 'a b c d e f g h i j k l m n o p q r s t u v w x y z'.repeat(20);
+    const out = clampString(long, 40);
+    expect(out.endsWith('…')).toBe(true);
+    expect([...out].length).toBeLessThanOrEqual(40);
+  });
+
+  it('prefers a word boundary rather than cutting mid-word', () => {
+    const out = clampString('alpha beta gamma delta epsilon zeta', 20);
+    // Within cap, and the text before the ellipsis ends on a complete word
+    // (the source has no trailing partial word left dangling).
+    expect([...out].length).toBeLessThanOrEqual(20);
+    const body = out.replace(/…$/u, '');
+    // Every whitespace-separated token in the body is a whole word from the input.
+    const words = new Set('alpha beta gamma delta epsilon zeta'.split(' '));
+    for (const token of body.split(' ').filter(Boolean)) {
+      expect(words.has(token)).toBe(true);
+    }
+  });
+
+  it('hard-cuts a single unbroken long token instead of emptying it', () => {
+    const out = clampString('x'.repeat(500), 10);
+    expect([...out].length).toBe(10);
+    expect(out.endsWith('…')).toBe(true);
+    expect(out.slice(0, 9)).toBe('x'.repeat(9));
+  });
+
+  it('counts by code points so multi-unit characters are never split', () => {
+    const emoji = '😀'.repeat(50); // each is 2 UTF-16 code units
+    const out = clampString(emoji, 10);
+    expect([...out].length).toBeLessThanOrEqual(10);
+    // No lone surrogate: re-spreading yields only whole emoji (+ ellipsis).
+    for (const ch of [...out]) {
+      expect(ch === '😀' || ch === '…').toBe(true);
+    }
+  });
+
+  it('returns empty string for a non-positive cap', () => {
+    expect(clampString('anything', 0)).toBe('');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* clampStringsToSchema — the schema-driven salvage that kills the bug class    */
+/* -------------------------------------------------------------------------- */
+
+describe('clampStringsToSchema', () => {
+  it('THE REPRO: an entity field note over its 200 cap is clamped so the entity parses', () => {
+    // Mirrors the live failure: dataModel.entities[i].fields[j].notes too long.
+    const verboseNote =
+      'This field stores the appointment reminder configuration including the SMS ' +
+      'template, the lead time in hours, the retry policy, the opt-out handling, and ' +
+      'the escalation path when a patient does not confirm within the configured window ' +
+      'which in practice must be tuned per clinic and per provider preference.';
+    expect(verboseNote.length).toBeGreaterThan(200);
+
+    const rawEntity = {
+      name: 'Appointment',
+      fields: [
+        { name: 'id', type: 'string', required: true },
+        { name: 'reminderConfig', type: 'json', required: false, notes: verboseNote },
+      ],
+    };
+
+    // Before clamp the entity is rejected (that's the bug).
+    expect(entitySchema.safeParse(rawEntity).success).toBe(false);
+
+    const clamped = clampStringsToSchema(entitySchema, rawEntity) as typeof rawEntity;
+    // After clamp it parses, and the note is within cap.
+    const parsed = entitySchema.safeParse(clamped);
+    expect(parsed.success).toBe(true);
+    expect(clamped.fields[1].notes!.length).toBeLessThanOrEqual(200);
+  });
+
+  it('clamps an over-long note nested deep inside a full architecture draft', () => {
+    const longNote = 'detail '.repeat(80).trim(); // ~500+ chars, over the 200 cap
+    const raw = baseArchitecture(['one-to-many']);
+    // Overflow a field note and an entity description (both capped).
+    raw.dataModel.entities[0].fields[0] = {
+      name: 'id',
+      type: 'string',
+      required: true,
+      // @ts-expect-error — deliberately over-cap raw model output
+      notes: longNote,
+    };
+    // @ts-expect-error — description is optional/capped at 300 on the entity
+    raw.dataModel.entities[1].description = 'x'.repeat(400);
+
+    expect(architectureDraftSchema.safeParse(raw).success).toBe(false);
+
+    const clamped = clampStringsToSchema(architectureDraftSchema, raw) as typeof raw;
+    expect(architectureDraftSchema.safeParse(clamped).success).toBe(true);
+  });
+
+  it('clamps clarify `why` (max 200) and `suggestions` items (max 120)', () => {
+    const raw = {
+      questions: [
+        {
+          id: 'q1',
+          question: 'Do clinics manage their own schedules?',
+          why: 'w'.repeat(400),
+          suggestions: ['s'.repeat(300), 'ok answer'],
+        },
+      ],
+    };
+    expect(clarifyResponseSchema.safeParse(raw).success).toBe(false);
+
+    const clamped = clampStringsToSchema(clarifyResponseSchema, raw) as typeof raw;
+    const parsed = clarifyResponseSchema.safeParse(clamped);
+    expect(parsed.success).toBe(true);
+    expect(clamped.questions[0].why.length).toBeLessThanOrEqual(200);
+    expect(clamped.questions[0].suggestions[0].length).toBeLessThanOrEqual(120);
+    expect(clamped.questions[0].suggestions[1]).toBe('ok answer'); // compliant → untouched
+  });
+
+  it('leaves a fully-compliant payload untouched and returns the same reference', () => {
+    const raw = baseArchitecture(['one-to-many']);
+    const out = clampStringsToSchema(architectureDraftSchema, raw);
+    expect(out).toBe(raw); // no over-cap string → identity, no clone
+  });
+
+  it('does NOT mutate the input (raw model output stays intact for logging)', () => {
+    const longNote = 'y'.repeat(500);
+    const raw = {
+      name: 'E',
+      fields: [{ name: 'id', type: 'string', required: true, notes: longNote }],
+    };
+    clampStringsToSchema(entitySchema, raw);
+    expect(raw.fields[0].notes).toBe(longNote); // original still 500 chars
+  });
+
+  it('handles a nullable capped string by clamping the string branch', () => {
+    const schema = z.object({ label: z.string().max(5).nullable() });
+    const clamped = clampStringsToSchema(schema, { label: 'abcdefghij' }) as { label: string };
+    expect([...clamped.label].length).toBeLessThanOrEqual(5);
+    // A null value is passed through, not touched.
+    expect(clampStringsToSchema(schema, { label: null })).toEqual({ label: null });
+  });
+
+  it('only touches strings that ACTUALLY exceed the cap (structural non-length errors survive)', () => {
+    // Missing required field is a structural failure, not a length one — clamp
+    // must not paper over it; it should still fail zod so the re-ask path fires.
+    const raw = { name: 'E', fields: [] }; // fields.min(1) violated
+    const out = clampStringsToSchema(entitySchema, raw);
+    expect(entitySchema.safeParse(out).success).toBe(false);
+  });
+
+  it('is defensive: non-object / primitive inputs pass straight through', () => {
+    expect(clampStringsToSchema(entitySchema, null)).toBeNull();
+    expect(clampStringsToSchema(entitySchema, 42)).toBe(42);
+    expect(clampStringsToSchema(entitySchema, 'raw')).toBe('raw');
   });
 });
