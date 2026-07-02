@@ -100,11 +100,13 @@ const IDEAS: { label: string; brief: ProjectBrief }[] = [
 ];
 
 describe.skipIf(!HAS_KEY)('LIVE: full PRD generation pipeline (real Anthropic)', () => {
-  // Real generations are slow: 3 sequential LLM stages + a title call, each
-  // several thousand output tokens (~60-90s per stage on the fast model). A
-  // heavy architecture draft alone has been seen at ~90s, so give each idea a
-  // generous per-test budget to avoid a false timeout failure.
-  const PER_IDEA_TIMEOUT_MS = 360_000;
+  // Real generations are slow: 3 sequential LLM stages + a title call. On the
+  // fast model each stage is several thousand output tokens; a VERBOSE idea
+  // (enterprise multi-tenant) has been measured at prd≈107s + architecture≈154s
+  // + a heavy plan stage, which blew past a 360s budget on the shared endpoint —
+  // a false TIMEOUT failure, not a schema failure. Give each idea 10 minutes so
+  // the verbose repro cases have real headroom.
+  const PER_IDEA_TIMEOUT_MS = 600_000;
 
   it.each(IDEAS)(
     'produces a schema-valid PrdDocument end to end for "$label"',
