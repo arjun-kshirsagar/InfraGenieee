@@ -521,6 +521,19 @@ export const apiErrorSchema = z.object({
        *  do NOT use this — they return 200 with `gaps[]` so four working
        *  providers are still comparable. Retryable. */
       'pricing_unavailable',
+      /** Feature 3: the repo URL is well-formed but the repository does not
+       *  exist or is private. NOT retryable — the user must fix the URL or make
+       *  the repo public. Never says which, because the host doesn't tell us
+       *  (a private repo 404s anonymously, same as a typo). */
+      'repo_not_found',
+      /** Feature 3: the git host could not be read right now — rate-limited
+       *  (anonymous GitHub is 60 req/hr/IP), 5xx, or a timeout. Retryable. */
+      'repo_unavailable',
+      /** Feature 3: the URL is a git URL we recognise but cannot read contents
+       *  for (GitLab/Bitbucket in v1). The analysis still proceeds with
+       *  `confidence: 'unknown'`, so this code is only used when the URL is not
+       *  a supported git host at all. */
+      'unsupported_host',
     ]),
     message: z.string(),
     issues: z.array(z.object({ path: z.string(), message: z.string() })).optional(),

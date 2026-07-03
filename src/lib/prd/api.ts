@@ -48,6 +48,12 @@ export const ERROR_STATUS: Record<ApiError['error']['code'], number> = {
   // than 500. A PARTIAL pricing failure never reaches here: it returns 200 with
   // `gaps[]` so the providers that did price stay comparable.
   pricing_unavailable: 503,
+  // 404: Feature 3 — the repo is absent or private. Not retryable.
+  repo_not_found: 404,
+  // 503: Feature 3 — the git host is rate-limiting us or is down. Retryable.
+  repo_unavailable: 503,
+  // 400: Feature 3 — not a git repository URL we support.
+  unsupported_host: 400,
 };
 
 /**

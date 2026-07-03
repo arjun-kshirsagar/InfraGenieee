@@ -12,8 +12,8 @@ them plan it and ship it:
 | # | Feature | Status |
 |---|---------|--------|
 | 1 | PRD & Plan generator (**idea → AI-reasoned** PRD + architecture + task breakdown) | done (verified) |
-| 2 | Deployment cost predictor (multi-vendor comparison, PRD-aware) | in progress — see `docs/feature-2-cost-predictor.md` |
-| 3 | One-click deploy (customer's app → Vercel first) | not started |
+| 2 | Deployment cost predictor (multi-vendor comparison, PRD-aware) | done — see `docs/feature-2-cost-predictor.md` |
+| 3 | One-click deploy (paste repo → Vercel/Netlify/Render buttons) | in progress — see `docs/feature-3-one-click-deploy.md` |
 
 ## 2. Stack
 
@@ -37,15 +37,18 @@ src/
       cost/prices/route.ts   # GET  → PriceBook[] (fetched + cited)
       cost/recommend/route.ts# POST → CostRecommendation
       cost/estimate/route.ts # POST → CostComparison (server-side mirror)
+      deploy/analyze/route.ts# POST → DeployPlan (repo URL → stack + provider fit + buttons)
     prd/
       new/page.tsx           # idea + context input flow
       [id]/page.tsx          # generated PRD view (reads client store)
     cost/page.tsx            # ⭐ Feature 2 — the interactive cost explorer
+    deploy/page.tsx          # ⭐ Feature 3 — paste a repo, get deploy buttons
     layout.tsx  page.tsx  globals.css
   components/
     ui/                      # shadcn primitives — generated, don't hand-edit
     prd/                     # Feature 1 components
     cost/                    # Feature 2 components
+    deploy/                  # Feature 3 components
   lib/
     prd/
       generation.ts          # ⭐ the LLM seam: interfaces + GenerationError
@@ -58,15 +61,25 @@ src/
       catalog/               # ⭐ pure data: services/SKUs/dimensions, NO PRICES
       pricing/               # server-only: fetch + extract + evidence gate + cache
       estimate/              # ⭐ pure: quantities, totals, comparison, badges
+    deploy/
+      repo-seam.ts           # ⭐ Feature 3 seam: RepoSource + RepoError
+      deploy-url.ts          # ⭐ pure: table-driven one-click URL builder
+      repo-url.ts            # ⭐ pure: parse whatever the user pasted → RepoRef
+      source/                # server-only: public GitHub reads + snapshot cache
+      detect/                # ⭐ pure: signals → StackDetection (every claim cited)
+      recommend/             # ⭐ pure: provider fit, NO LLM
+      generate/              # ⭐ pure: render.yaml / vercel.json / netlify.toml
     utils.ts
   types/
     prd.ts                   # ⭐ Feature 1 contract: zod schemas + inferred types
     cost.ts                  # ⭐ Feature 2 contract: zod schemas + inferred types
+    deploy.ts                # ⭐ Feature 3 contract: zod schemas + provider table
 docs/
   architecture.md            # this file
   api-contracts.md           # HTTP contracts
   feature-1-ai-prd.md        # ⭐ Feature 1 design (read this first)
   feature-2-cost-predictor.md# ⭐ Feature 2 design (read this first)
+  feature-3-one-click-deploy.md # ⭐ Feature 3 design (read this first)
 ```
 
 **Rules**
@@ -75,15 +88,20 @@ docs/
    that duplicates a zod schema — use `z.infer`.
 2. Route handlers validate input with the request schema and return the
    response schema shape. No business logic in `route.ts`.
-3. `src/lib/prd/derive/` and `src/lib/cost/estimate/` must stay **pure**: same
+3. `src/lib/prd/derive/`, `src/lib/cost/estimate/` and every part of
+   `src/lib/deploy/` except `source/` must stay **pure**: same
    input → same output, no clock, no randomness, no I/O. They hold the
    mechanical work we deliberately do NOT trust the model with. The cost engine
-   being pure is also what lets it run in the browser for live totals.
+   being pure is also what lets it run in the browser for live totals; the
+   deploy pipeline being pure is what lets the live smoke test run the exact
+   same functions against real repos that the fixtures run against.
 4. UI components never import from `src/lib/prd/llm/`, `generation.ts`,
-   `src/lib/cost/pricing/` or `pricing-seam.ts` — they consume the API. No API
+   `src/lib/cost/pricing/`, `pricing-seam.ts`, `src/lib/deploy/source/` or
+   `repo-seam.ts` — they consume the API. No API
    key may be reachable from a client bundle.
 5. Anything user-visible that the AI decided rather than the user must appear in
-   `prd.assumptions` (Feature 1) or `recommendation.assumptions` (Feature 2).
+   `prd.assumptions` (Feature 1), `recommendation.assumptions` (Feature 2) or
+   `plan.assumptions` (Feature 3).
 6. **The cost catalog contains no prices.** Numbers reach the engine only as a
    `PriceRecord`, which cannot parse without a `source` carrying `evidence`.
    That is what makes "every price is cited" a type-level guarantee.
@@ -149,6 +167,12 @@ add server persistence, and the route contracts don't change when we do.
 | **Cost engine location** | pure module, runs in the browser | live totals on every toggle without a round-trip |
 | **Priced region** | exactly one per provider, surfaced in the UI | multi-region multiplies the fetch surface ~20× for a day-one comparison nobody asked for |
 | **Price cache** | `.cache/pricing/<provider>.json`, 7-day TTL | prices move monthly; a file survives hot reloads where a Map doesn't |
+| **Detection provenance (F3)** | every `DetectionSignal` carries `path` + verbatim `excerpt` | an uncited stack guess is indistinguishable from a fabricated one — same device as `PriceRecord.source.evidence` |
+| **Uncertain detection (F3)** | `confidence: 'unknown'` ⇒ `primary: null`, all three providers offered | zod-enforced; an unreadable repo must not produce a crowned winner |
+| **Provider fit (F3)** | pure deterministic rules, **no LLM** | fit is a small stable rule set we can write down; a model would add latency and non-determinism to a decision that doesn't vary |
+| **Deploy URL construction** | one table (`DEPLOY_PROVIDER_META`), values via `URLSearchParams` | three providers share one "clone my repo" pattern; encoding is the injection defence |
+| **We never deploy** | we emit a link into the provider's own hosted flow | no provider token, no provider API, nothing billable can happen on our side |
+| **Repo reads** | anonymous public GitHub only, bounded to 16 files / 64 KB each | measured 60 req/hr/IP unauthenticated; GitLab/Bitbucket get buttons but `confidence: 'unknown'` |
 
 ## 6. Cost safety
 
