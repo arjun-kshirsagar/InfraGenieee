@@ -24,7 +24,7 @@
  */
 
 import * as React from 'react';
-import { Rocket, RotateCcw, FileCheck2, Wrench } from 'lucide-react';
+import { Rocket, RotateCcw, FileCheck, Wrench } from 'lucide-react';
 
 import type { DeployPlan } from '@/types/deploy';
 import { formatRepoLabel } from '@/lib/deploy/repo-url';
@@ -98,7 +98,7 @@ export function DeployResultView({
             <Badge variant={confidence.variant}>{confidence.label}</Badge>
             {plan.usedPrdContext ? (
               <Badge variant="outline" className="gap-1">
-                <FileCheck2 className="size-3" aria-hidden />
+                <FileCheck className="size-3" aria-hidden />
                 Used your PRD
               </Badge>
             ) : null}
@@ -138,7 +138,7 @@ export function DeployResultView({
       {configsSlot ??
         (plan.configs.length > 0 ? (
           <SlotPlaceholder
-            icon={<FileCheck2 className="size-6" />}
+            icon={<FileCheck className="size-6" />}
             title="Generated configs mount here (F3)"
             note={`This plan carries ${plan.configs.length} config artifact${plan.configs.length === 1 ? '' : 's'} (e.g. render.yaml) that will render as copyable, downloadable snippets.`}
           />

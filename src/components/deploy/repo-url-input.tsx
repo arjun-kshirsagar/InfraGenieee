@@ -15,7 +15,7 @@
  */
 
 import * as React from 'react';
-import { Loader2, Github, Search } from 'lucide-react';
+import { Loader2, GitBranch, Search } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -84,7 +84,7 @@ export function RepoUrlInput({
       }}
     >
       <Label htmlFor={id} className="text-sm font-medium">
-        <Github className="size-4" aria-hidden />
+        <GitBranch className="size-4" aria-hidden />
         Your repository URL
       </Label>
 
