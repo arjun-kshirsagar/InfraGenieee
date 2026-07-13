@@ -158,22 +158,23 @@ export function DeployClient() {
     bootstrappedRef.current = true;
 
     const docs = listDocuments();
-    setSummaries(docs);
 
-    // A `?prd=<id>` deep-link attaches that PRD's context and STAYS on input.
-    if (deepLinkId && docs.some((d) => d.id === deepLinkId)) {
-      attachPrd(deepLinkId);
-    }
-
-    // Restore the last successful analysis on a plain reload (no deep-link).
+    // Read everything synchronously, then apply state in a microtask so we never
+    // call setState synchronously in the effect body (avoids cascading renders).
+    const wantAttach = deepLinkId && docs.some((d) => d.id === deepLinkId) ? deepLinkId : null;
     const lastUrl = loadLastAnalyzed();
-    if (lastUrl) {
-      const plan = loadDeployState(lastUrl);
-      if (plan) {
-        setUrl(plan.repo.canonicalUrl);
-        setStage({ name: 'result', plan });
+    const restored = lastUrl ? loadDeployState(lastUrl) : null;
+
+    queueMicrotask(() => {
+      setSummaries(docs);
+      // A `?prd=<id>` deep-link attaches that PRD's context and STAYS on input.
+      if (wantAttach) attachPrd(wantAttach);
+      // Restore the last successful analysis on a plain reload (no deep-link).
+      if (restored) {
+        setUrl(restored.repo.canonicalUrl);
+        setStage({ name: 'result', plan: restored });
       }
-    }
+    });
     // Run once on mount; deepLinkId, attachPrd captured then.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
