@@ -24,7 +24,6 @@ import type {
   Framework,
   PackageManager,
   Runtime,
-  ServiceNeed,
 } from '@/types/deploy';
 
 /* -------------------------------------------------------------------------- */
@@ -975,67 +974,13 @@ function runScriptPrefix(pm: PackageManager): string {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Service needs (light heuristics; B4 owns the full inference)               */
+/* Service needs                                                              */
 /* -------------------------------------------------------------------------- */
 
 /**
- * A minimal, cited service-need scan so a `fullstack` app with an obvious
- * Postgres dependency reports `database` even before B4's richer inference
- * lands. Every need cites a real dependency substring; nothing is asserted.
+ * The full, cited service-need inference lives in `./needs.ts` (task B4).
+ * It is re-exported here so existing importers of `detectNeeds` from `rules`
+ * keep working, but the source of truth is `needs.ts`.
  */
-export function detectNeeds(probe: Probe): { needs: ServiceNeed[]; signals: DetectionSignal[] } {
-  const needs = new Set<ServiceNeed>();
-  const signals: DetectionSignal[] = [];
-
-  const addFromPkg = (dep: string, need: ServiceNeed, implies: string) => {
-    if (!probe.pkg) return;
-    const excerpt = depExcerpt(probe.pkg, dep);
-    if (excerpt) {
-      needs.add(need);
-      signals.push({
-        id: `need:${need}:${dep}`,
-        kind: 'dependency',
-        path: 'package.json',
-        excerpt: clampExcerpt(excerpt),
-        implies,
-        weight: 'weak',
-      });
-    }
-  };
-
-  // Database drivers / ORMs
-  addFromPkg('pg', 'database', '`pg` (Postgres driver) → database');
-  addFromPkg('prisma', 'database', '`prisma` → database');
-  addFromPkg('@prisma/client', 'database', '`@prisma/client` → database');
-  addFromPkg('mysql2', 'database', '`mysql2` → database');
-  addFromPkg('mongoose', 'database', '`mongoose` → database');
-  addFromPkg('typeorm', 'database', '`typeorm` → database');
-  // Cache
-  addFromPkg('redis', 'cache', '`redis` → cache/queue');
-  addFromPkg('ioredis', 'cache', '`ioredis` → cache/queue');
-  // Queue
-  addFromPkg('bullmq', 'queue', '`bullmq` → queue');
-  addFromPkg('bull', 'queue', '`bull` → queue');
-  // Websockets
-  addFromPkg('socket.io', 'websockets', '`socket.io` → websockets');
-  addFromPkg('ws', 'websockets', '`ws` → websockets');
-
-  // Python: a Postgres driver in requirements → database.
-  const reqs = probe.content('requirements.txt');
-  if (reqs) {
-    for (const [needle, need, implies] of [
-      ['psycopg2', 'database', 'psycopg2 → Postgres database'],
-      ['psycopg', 'database', 'psycopg → Postgres database'],
-      ['redis', 'cache', 'redis → cache/queue'],
-      ['celery', 'queue', 'celery → task queue'],
-    ] as Array<[string, ServiceNeed, string]>) {
-      const s = citedSignal('dependency', `need:${need}:${needle}`, 'requirements.txt', reqs, needle, implies, 'weak');
-      if (s) {
-        needs.add(need);
-        signals.push(s);
-      }
-    }
-  }
-
-  return { needs: [...needs], signals };
-}
+export { detectNeeds } from './needs';
+export type { NeedsVerdict } from './needs';

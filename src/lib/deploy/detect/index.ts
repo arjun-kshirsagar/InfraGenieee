@@ -36,12 +36,12 @@ import {
   detectExisting,
   detectFramework,
   detectMonorepo,
-  detectNeeds,
   detectNodeVersion,
   detectPackageManager,
   parsePackageJson,
   type Probe,
 } from './rules';
+import { detectNeeds } from './needs';
 
 /* -------------------------------------------------------------------------- */
 /* Building the Probe view over a snapshot                                    */
@@ -161,6 +161,7 @@ export function detectStack(snapshot: RepoSnapshot): StackDetection {
     // JS app we can't name: framework `other`, runtime node, shape unknown.
     if (probe.pkg) {
       for (const s of needsVerdict.signals) allSignals.push(s);
+      for (const n of needsVerdict.notes) notes.push(n);
       const buildHints = deriveBuildHints(probe, pmVerdict.packageManager, null, nodeVerdict.nodeVersion);
       notes.push(
         'Found a package.json but no framework we recognise. Detection is low-confidence; verify the build and start commands before deploying.',
@@ -196,6 +197,7 @@ export function detectStack(snapshot: RepoSnapshot): StackDetection {
   for (const s of fw.signals) allSignals.push(s);
   for (const s of needsVerdict.signals) allSignals.push(s);
   for (const n of fw.notes) notes.push(n);
+  for (const n of needsVerdict.notes) notes.push(n);
 
   // Harden appShape: when torn between ssr and fullstack, or a server framework
   // has persistence needs, prefer fullstack + caveat (docs: a wrong `static`
