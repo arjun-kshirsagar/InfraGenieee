@@ -48,6 +48,7 @@ import { DeployEmptyState } from '@/components/deploy/deploy-empty-state';
 import { DeployLoadingView } from '@/components/deploy/deploy-loading-view';
 import { DeployErrorView } from '@/components/deploy/deploy-error-view';
 import { DeployResultView } from '@/components/deploy/deploy-result-view';
+import { DetectedStackCard } from '@/components/deploy/detected-stack-card';
 
 type Stage =
   | { name: 'input' }
@@ -215,6 +216,9 @@ export function DeployClient() {
           setUrl('');
           setStage({ name: 'input' });
         }}
+        detectionSlot={
+          <DetectedStackCard detection={stage.plan.detection} repo={stage.plan.repo} />
+        }
       />
     );
   }
