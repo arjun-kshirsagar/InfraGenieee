@@ -49,6 +49,9 @@ import { DeployLoadingView } from '@/components/deploy/deploy-loading-view';
 import { DeployErrorView } from '@/components/deploy/deploy-error-view';
 import { DeployResultView } from '@/components/deploy/deploy-result-view';
 import { DetectedStackCard } from '@/components/deploy/detected-stack-card';
+import { ProviderFitList } from '@/components/deploy/provider-fit-card';
+import { ConfigSnippetList } from '@/components/deploy/config-snippet';
+import { DeployAssumptions } from '@/components/deploy/deploy-result';
 
 type Stage =
   | { name: 'input' }
@@ -219,6 +222,13 @@ export function DeployClient() {
         detectionSlot={
           <DetectedStackCard detection={stage.plan.detection} repo={stage.plan.repo} />
         }
+        fitsSlot={
+          <div className="flex flex-col gap-6">
+            <ProviderFitList fits={stage.plan.fits} primary={stage.plan.primary} />
+            <DeployAssumptions assumptions={stage.plan.assumptions} />
+          </div>
+        }
+        configsSlot={<ConfigSnippetList configs={stage.plan.configs} />}
       />
     );
   }
