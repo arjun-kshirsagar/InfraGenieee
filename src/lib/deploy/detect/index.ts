@@ -72,11 +72,20 @@ function buildProbe(snapshot: RepoSnapshot): Probe {
 /* The detector                                                               */
 /* -------------------------------------------------------------------------- */
 
-const UNREADABLE_HOST_NOTE = (host: string) =>
+/**
+ * The note shown when a non-GitHub host is analysed. Exported so the plan
+ * builder (`src/lib/deploy/plan.ts`), which skips the network fetch entirely for
+ * non-GitHub hosts, produces the exact same honest wording without a snapshot.
+ */
+export const UNREADABLE_HOST_NOTE = (host: string) =>
   `We can read repository contents for GitHub only in v1; ${host} contents were not read, so this analysis is based on the URL alone. All three providers are offered with guidance.`;
 
-/** The `unknown`-confidence result: no framework, no needs, an explicit note. */
-function unknownDetection(notes: string[]): StackDetection {
+/**
+ * The `unknown`-confidence result: no framework, no needs, an explicit note.
+ * Exported so the plan builder can construct the same schema-valid detection for
+ * a non-GitHub host without fabricating a snapshot to feed `detectStack`.
+ */
+export function unknownDetection(notes: string[]): StackDetection {
   const detection: StackDetection = {
     framework: 'unknown',
     frameworkVersion: null,

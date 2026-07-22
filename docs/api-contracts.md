@@ -36,6 +36,9 @@ Conventions:
 | `llm_unavailable` | 503 | Upstream 429/5xx/timeout — **retryable**, offer a retry |
 | `llm_not_configured` | 500 | Server has no `ANTHROPIC_API_KEY` — deployment fault |
 | `pricing_unavailable` | 503 | **Feature 2** — no price book at all (no `TAVILY_API_KEY`, or every source failed). **Retryable.** A PARTIAL failure is not this: it returns 200 with `gaps[]`. |
+| `repo_not_found` | 404 | **Feature 3** — the repo is absent **or** private (anonymous GitHub 404s for both; the message names both). Not retryable. |
+| `repo_unavailable` | 503 | **Feature 3** — the git host is rate-limiting us (anonymous GitHub is 60 req/hr/IP) or is down/timed out. **Retryable**; a `Retry-After` header is passed through when the host gave one. |
+| `unsupported_host` | 400 | **Feature 3** — a git URL on a host we don't support (only GitHub/GitLab/Bitbucket). |
 
 ---
 
@@ -507,3 +510,113 @@ upstream fetch beyond the (cached) price books.
 | `400` | `validation_error` / `bad_request` | bad body, unknown SKU id, or role/provider mismatch |
 | `503` | `pricing_unavailable` | no price book at all — retryable |
 | `500` | `internal_error` | unexpected |
+
+---
+
+## Feature 3 — One-click deploy
+
+Contract schemas live in `src/types/deploy.ts` (zod is the source of truth);
+rationale is in `docs/feature-3-one-click-deploy.md`.
+
+### `POST /api/deploy/analyze`
+
+Turns a pasted repository URL (plus an optional PRD slice) into a `DeployPlan`:
+the detected stack (every claim cites a real file), three provider fits with
+reasoning, generated config artifacts, and a `primary` (or `null` when the repo
+could not be read confidently).
+
+**No LLM is involved.** Provider fit is a deterministic rule set (docs §6), so
+there are no `llm_*` codes and no long `maxDuration`. The whole analysis is a
+handful of *anonymous* GitHub reads (no token, 60 req/hr/IP budget) plus pure
+functions. `runtime = 'nodejs'`, `dynamic = 'force-dynamic'`.
+
+The handler contains no business logic: parse JSON → `analyzeRequestSchema` →
+delegate to `buildDeployPlan` → self-validate against `analyzeResponseSchema` →
+respond. `repoUrl` is whatever the user pasted, **unnormalised** — the server
+parses it so one parser and one set of error messages are authoritative; the
+client must not canonicalise first.
+
+**We never deploy.** The response is a set of URLs into each provider's OWN
+hosted flow. InfraGenie holds no provider token and creates no resources.
+
+**Request** — `analyzeRequestSchema`
+
+```json
+{
+  "repoUrl": "https://github.com/vercel/next-learn",
+  "prdContext": { "…": "optional DeployPrdContext — sharpens fit, never required" }
+}
+```
+
+`prdContext` is optional everywhere: a bare URL still yields a full plan; a PRD
+only sharpens provider fit (budget → free-tier bias, a `datastore` component →
+Render's managed DB, …) and sets `usedPrdContext: true` when it changed anything.
+
+**Response** — `analyzeResponseSchema` — `{ plan: DeployPlan }`
+
+Real, verified response for `https://github.com/vercel/next-learn` (trimmed —
+run against the live GitHub source 2026-07-28):
+
+```json
+{
+  "plan": {
+    "repo": {
+      "host": "github", "owner": "vercel", "repo": "next-learn",
+      "branch": null, "subdir": null,
+      "canonicalUrl": "https://github.com/vercel/next-learn"
+    },
+    "detection": {
+      "framework": "nextjs", "frameworkVersion": "^14.0.0",
+      "runtime": "node", "appShape": "ssr", "packageManager": "pnpm",
+      "needs": [],
+      "build": { "installCommand": "pnpm install", "startCommand": "pnpm run start", "nodeVersion": ">=18.17.0", "buildCommand": null, "outputDir": null },
+      "existing": { "vercel": false, "netlify": false, "render": false, "dockerfile": false },
+      "monorepo": false,
+      "signals": [
+        { "id": "dep:next", "kind": "dependency", "path": "package.json", "excerpt": "\"next\": \"^14.0.0\"", "implies": "`next` dependency → Next.js", "weight": "strong" }
+      ],
+      "confidence": "high",
+      "notes": []
+    },
+    "fits": [
+      { "provider": "vercel",  "verdict": "recommended",     "score": 95, "reasons": ["Vercel is the first-party host for Next.js…"], "caveats": [], "deployUrl": "https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext-learn", "requiresConfig": false },
+      { "provider": "netlify", "verdict": "possible",        "score": 55, "reasons": ["Netlify runs Next.js through its Next runtime/adapter…"], "caveats": [], "deployUrl": "https://app.netlify.com/start/deploy?repository=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext-learn", "requiresConfig": false },
+      { "provider": "render",  "verdict": "possible",        "score": 50, "reasons": ["Render can run Next.js as a Node web service…"], "caveats": [], "deployUrl": "https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext-learn", "requiresConfig": false }
+    ],
+    "primary": "vercel",
+    "assumptions": [],
+    "configs": [],
+    "usedPrdContext": false,
+    "generatedAt": "2026-07-28T18:30:00.000Z"
+  }
+}
+```
+
+Notes for the frontend:
+
+- `fits` is ALWAYS length 3, one per provider, sorted by `score` descending
+  (ties broken by canonical vercel → netlify → render order). Render `score` for
+  a full-stack + Postgres repo (verified against `digitalocean/sample-django`)
+  is `recommended` with `requiresConfig: true` and a generated `render.yaml`
+  appears in `configs`.
+- `primary` is `null` whenever `detection.confidence === 'unknown'` (a repo we
+  couldn't read — every non-GitHub host, or an empty tree). In that case all
+  three fits are `possible` and all three `deployUrl`s are still present: the
+  buttons work regardless of host, only detection is missing.
+- A fit with `requiresConfig: true` must visibly tell the user to commit the
+  matching `configs[]` artifact (Render blueprint) BEFORE using the button.
+- `score` is for ordering only — never render it as a precise number; render the
+  `verdict` badge.
+
+| Status | Code | When |
+|---|---|---|
+| `200` | — | `{ plan }` (may carry `confidence: 'unknown'`, `primary: null`) |
+| `400` | `bad_request` | body is not valid JSON |
+| `400` | `validation_error` | body failed the request schema; **or** the URL is unparseable (`invalid_url`); **or** the repo tree is too large (`too_large`) |
+| `400` | `unsupported_host` | a git URL on a host we don't support (only GitHub/GitLab/Bitbucket) |
+| `404` | `repo_not_found` | repo absent **or** private — the message names **both** (anonymous GitHub can't tell them apart) |
+| `503` | `repo_unavailable` | rate-limited / 5xx / timeout — **retryable**; a `Retry-After` header is passed through when the host gave one |
+| `500` | `internal_error` | unexpected, or the assembled plan failed self-validation |
+
+An upstream body, URL, or rate-limit header is **never** returned to the client
+— it is logged server-side only.
