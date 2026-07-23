@@ -9,7 +9,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:live:deploy": "RUN_LIVE_DEPLOY=1 vitest run src/lib/deploy/deploy.live.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
