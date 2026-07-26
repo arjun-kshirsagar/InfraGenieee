@@ -229,15 +229,19 @@ export class GitHubRepoSource implements RepoSource {
 
     // 2 — tree for the resolved branch, with the one branch/subdir retry.
     const requestedBranch = ref.branch ?? defaultBranch;
-    const { resolvedBranch, treeEntries, entriesTruncated } = await this.fetchTreeWithRetry(
-      ref,
-      requestedBranch,
-      defaultBranch,
-      signal,
-    );
+    const {
+      resolvedBranch,
+      treeEntries,
+      entriesTruncated: githubTruncated,
+    } = await this.fetchTreeWithRetry(ref, requestedBranch, defaultBranch, signal);
 
     // Scope to the subdir (if any) and normalise paths relative to that root.
-    const { entries, existingPaths } = scopeEntries(treeEntries, ref.subdir);
+    // `existingPaths` is built from the FULL tree (BLOCKER-2), so the prober
+    // finds root manifests regardless of GitHub's tree order; the entries
+    // listing is capped by relevance and reports `selfTruncated` when WE drop
+    // entries so the truncation caveat fires (detect/index.ts).
+    const { entries, existingPaths, selfTruncated } = scopeEntries(treeEntries, ref.subdir);
+    const entriesTruncated = githubTruncated || selfTruncated;
 
     // 3 — probe file contents, capped.
     const files = await this.probeFiles(ref, resolvedBranch, existingPaths, signal);
@@ -463,6 +467,24 @@ export class GitHubRepoSource implements RepoSource {
 /* Pure tree → entries scoping (exported for unit tests)                      */
 /* -------------------------------------------------------------------------- */
 
+/** The schema caps `snapshot.entries` at this length (`repoSnapshotSchema`). */
+const MAX_ENTRIES = 2000;
+
+/** Basenames whose CONTENTS we may probe. Precomputed for relevance ranking so
+ *  a root manifest is never dropped by the entry cap (BLOCKER-2). */
+const PROBE_BASENAMES: ReadonlySet<string> = new Set(PROBE_FILES);
+
+/** A signal-bearing entry we must never drop when capping: a root-level entry
+ *  (no `/` in its analysed-root-relative path) OR any file whose basename is a
+ *  probe target, at any depth. These are the only entries detection reads. */
+function isRelevantEntry(rel: string, type: RepoEntry['type']): boolean {
+  const isRoot = !rel.includes('/');
+  if (isRoot) return true;
+  if (type !== 'file') return false;
+  const base = rel.slice(rel.lastIndexOf('/') + 1);
+  return PROBE_BASENAMES.has(base);
+}
+
 /**
  * Convert a recursive git tree into `RepoEntry[]`, scoped to `subdir` when set,
  * with every path made relative to the analysed root. Also returns the set of
@@ -471,17 +493,38 @@ export class GitHubRepoSource implements RepoSource {
  * - `blob` → `file`, `tree` → `dir`; `commit` (submodule) entries are dropped.
  * - When `subdir` is set, only entries under `<subdir>/` are kept and the
  *   `<subdir>/` prefix is stripped; the subdir directory itself is excluded.
- * - Capped at the schema's 2000-entry limit (docs §5: a truncated tree still
- *   yields a snapshot — detection handles the truncation).
+ *
+ * ## Cap by RELEVANCE, not arrival order (BLOCKER-2, docs §5)
+ *
+ * GitHub's recursive tree is NOT root-first, so in a big monorepo the root
+ * manifests (`package.json`, `turbo.json`, …) can sit past raw index 2000. A
+ * naive "stop at 2000 in arrival order" cap dropped them from BOTH the entries
+ * listing AND `existingPaths`, so the prober never read `package.json` and a
+ * perfectly readable monorepo was reported unreadable.
+ *
+ * Two independent guarantees fix that:
+ *
+ *   1. `existingPaths` is built from the FULL tree. It is a `Set<string>` — not
+ *      schema-bound and cheap — so the prober can always find a root manifest
+ *      no matter where GitHub placed it in the tree. No extra network reads:
+ *      the prober still only reads files this Set proves exist, capped at
+ *      `MAX_PROBE_FILES`.
+ *   2. The `entries` array (the only schema-capped output) is filled by
+ *      relevance: every root-level entry and every probe-target file is kept
+ *      first, then the remaining budget is filled with the rest in tree order.
+ *      A truncated listing is therefore manifest-first, and `selfTruncated`
+ *      reports that WE dropped entries so the truncation caveat can fire.
  */
 export function scopeEntries(
   tree: GhTreeEntry[],
   subdir: string | null,
-): { entries: RepoEntry[]; existingPaths: Set<string> } {
+): { entries: RepoEntry[]; existingPaths: Set<string>; selfTruncated: boolean } {
   const prefix = subdir ? `${subdir.replace(/\/+$/, '')}/` : '';
-  const entries: RepoEntry[] = [];
   const existingPaths = new Set<string>();
 
+  // Pass 1 — normalise the whole tree into scoped entries and record EVERY file
+  // path (unbounded: the Set is not schema-bound and is what the prober reads).
+  const scoped: RepoEntry[] = [];
   for (const raw of tree) {
     const p = asString(raw.path);
     if (!p) continue;
@@ -500,13 +543,32 @@ export function scopeEntries(
     if (typeof raw.size === 'number' && Number.isFinite(raw.size) && raw.size >= 0) {
       entry.size = Math.floor(raw.size);
     }
-    entries.push(entry);
+    scoped.push(entry);
     if (type === 'file') existingPaths.add(rel);
-
-    if (entries.length >= 2000) break; // schema cap on entry count
   }
 
-  return { entries, existingPaths };
+  // Pass 2 — apply the schema entry cap by relevance, not arrival order. Keep
+  // all signal-bearing entries (root-level + probe targets) first, preserving
+  // tree order within each tier, then fill the remaining budget with the rest.
+  if (scoped.length <= MAX_ENTRIES) {
+    return { entries: scoped, existingPaths, selfTruncated: false };
+  }
+
+  const relevant: RepoEntry[] = [];
+  const rest: RepoEntry[] = [];
+  for (const e of scoped) {
+    (isRelevantEntry(e.path, e.type) ? relevant : rest).push(e);
+  }
+
+  // Relevant entries take priority; if they alone somehow exceed the cap we
+  // keep the first MAX_ENTRIES of them (root manifests come first in a repo, so
+  // this degrades gracefully). Otherwise fill the remainder from `rest`.
+  const entries =
+    relevant.length >= MAX_ENTRIES
+      ? relevant.slice(0, MAX_ENTRIES)
+      : [...relevant, ...rest.slice(0, MAX_ENTRIES - relevant.length)];
+
+  return { entries, existingPaths, selfTruncated: true };
 }
 
 /** Shared instance for the analyze route. */

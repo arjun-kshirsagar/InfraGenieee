@@ -97,6 +97,16 @@ interface RepoCase {
   needs: ServiceNeed[];
   /** True when the pipeline is expected to emit a render.yaml blueprint. */
   expectRenderYaml: boolean;
+  /** True when the repo is a monorepo/workspace root — we then assert
+   *  `detection.monorepo === true` (BLOCKER-2: the honesty machinery must steer
+   *  the user to a subdir rather than claim the repo is unreadable). */
+  expectMonorepo?: boolean;
+  /** True when the repo is big enough that OUR entry cap (or GitHub's) fires,
+   *  so `entriesTruncated` must be true and the truncation caveat must appear.
+   *  BLOCKER-2 regression guard: a real monorepo whose root manifests sit past
+   *  raw tree index 2000 must STILL be read (framework known, confidence not
+   *  `unknown`) — the exact false-negative that shipped. */
+  expectSelfTruncated?: boolean;
 }
 
 const REPOS: RepoCase[] = [
@@ -152,6 +162,34 @@ const REPOS: RepoCase[] = [
     primary: 'render',
     needs: [],
     expectRenderYaml: true,
+  },
+  {
+    // BLOCKER-2 regression guard (t_5db233af LIVE QA). A large, real pnpm+turbo
+    // monorepo whose root manifests (package.json at raw tree index ~5059,
+    // pnpm-workspace.yaml, turbo.json) sit FAR past GitHub's raw index 2000.
+    // Before the fix the arrival-order cap dropped them from `existingPaths`, so
+    // the prober never read package.json and the repo was falsely reported
+    // "we couldn't read this repository's contents" (confidence: unknown). The
+    // fix builds `existingPaths` from the FULL tree, so package.json is read and
+    // a NAMED framework is detected with confidence != 'unknown', monorepo:true,
+    // and the truncation caveat fires. We assert a NAMED framework + monorepo +
+    // truncation rather than a specific one, because the honesty-correct verdict
+    // for a workspace ROOT is "named framework, monorepo:true, go to a subdir",
+    // not a guess at which app under apps/ is "the" app.
+    label: 'Large monorepo root (shadcn-ui/ui)',
+    url: 'https://github.com/shadcn-ui/ui',
+    // The root workspace is a Vite-based tooling root; the Next.js apps live
+    // under apps/. `framework` here is whatever the root manifest honestly
+    // implies — asserted below only as "not `other`/unknown", plus monorepo.
+    framework: 'vite',
+    appShape: 'static',
+    runtime: 'static',
+    primary: 'netlify',
+    needs: [],
+    // A monorepo root still gets a (static) render.yaml blueprint.
+    expectRenderYaml: true,
+    expectMonorepo: true,
+    expectSelfTruncated: true,
   },
 ];
 
@@ -233,15 +271,40 @@ describe.skipIf(!RUN_LIVE)('one-click deploy — LIVE smoke (real GitHub + real 
       expect(deployPlanSchema.safeParse(plan).success).toBe(true);
 
       /* --- (1) detection matches reality ------------------------------- */
-      expect(plan.detection.framework).toBe(rc.framework);
-      expect(plan.detection.appShape).toBe(rc.appShape);
-      expect(plan.detection.runtime).toBe(rc.runtime);
+      if (rc.expectMonorepo) {
+        // For a monorepo ROOT we assert the honesty-correct verdict rather than
+        // a specific framework (which app under apps/ is "the" app is not ours
+        // to guess): a NAMED framework (never `other`), confidence != 'unknown',
+        // and monorepo:true so the user is steered to a subdir. This is the
+        // exact BLOCKER-2 false-negative guard — a readable monorepo must not be
+        // reported unreadable.
+        expect(plan.detection.framework).not.toBe('other');
+        expect(plan.detection.confidence).not.toBe('unknown');
+        expect(plan.detection.monorepo).toBe(true);
+        expect(plan.primary).not.toBeNull();
+      } else {
+        expect(plan.detection.framework).toBe(rc.framework);
+        expect(plan.detection.appShape).toBe(rc.appShape);
+        expect(plan.detection.runtime).toBe(rc.runtime);
+        /* --- (5) the expected provider is primary ---------------------- */
+        expect(plan.primary).toBe(rc.primary);
+      }
       for (const need of rc.needs) {
         expect(plan.detection.needs).toContain(need);
       }
 
-      /* --- (5) the expected provider is primary ------------------------ */
-      expect(plan.primary).toBe(rc.primary);
+      /* --- BLOCKER-2: WE-truncated a large tree, so the caveat must fire  */
+      if (rc.expectSelfTruncated) {
+        expect(snap.entriesTruncated).toBe(true);
+        // The user MUST be told we stopped reading — not silently mislead.
+        expect(
+          plan.detection.notes.some((n) => /too large to list fully/i.test(n)),
+          'a self-truncated repo must surface the truncation caveat',
+        ).toBe(true);
+        // And the root manifest MUST have been read despite the cap — the whole
+        // point of the fix. A monorepo root always has a package.json.
+        expect(Object.keys(snap.files)).toContain('package.json');
+      }
 
       /* --- (3) every signal is cited: non-empty excerpt + real path ---- */
       // Use the snapshot the plan was built from to rebuild the set of

@@ -495,9 +495,64 @@ describe('scopeEntries', () => {
     expect([...existingPaths]).toEqual(['index.ts']);
   });
 
-  it('caps at 2000 entries', () => {
+  it('caps the entries listing at 2000 and reports selfTruncated', () => {
     const big = Array.from({ length: 2500 }, (_, i) => ({ path: `f${i}.txt`, type: 'blob' }));
-    const { entries } = scopeEntries(big, null);
+    const { entries, selfTruncated } = scopeEntries(big, null);
     expect(entries.length).toBe(2000);
+    expect(selfTruncated).toBe(true);
+  });
+
+  it('does not report selfTruncated when the tree fits under the cap', () => {
+    const small = Array.from({ length: 100 }, (_, i) => ({ path: `f${i}.txt`, type: 'blob' }));
+    const { entries, selfTruncated } = scopeEntries(small, null);
+    expect(entries.length).toBe(100);
+    expect(selfTruncated).toBe(false);
+  });
+
+  // BLOCKER-2 (t_5db233af LIVE QA): GitHub's recursive tree is NOT root-first,
+  // so a root manifest can sit past raw index 2000. The old arrival-order cap
+  // dropped it from BOTH entries AND existingPaths, so the prober never read
+  // package.json and a readable monorepo was reported unreadable.
+  it('keeps a root manifest sitting AFTER index 2000 in existingPaths and entries', () => {
+    const tree = [
+      // 2500 deep nested files arrive first (as GitHub's raw order can do).
+      ...Array.from({ length: 2500 }, (_, i) => ({
+        path: `apps/v4/registry/f${i}.tsx`,
+        type: 'blob',
+      })),
+      // The root manifests arrive LAST.
+      { path: 'package.json', type: 'blob' },
+      { path: 'pnpm-workspace.yaml', type: 'blob' },
+      { path: 'turbo.json', type: 'blob' },
+    ];
+    const { entries, existingPaths, selfTruncated } = scopeEntries(tree, null);
+
+    // existingPaths is built from the FULL tree, so the prober WILL read them.
+    expect(existingPaths.has('package.json')).toBe(true);
+    expect(existingPaths.has('pnpm-workspace.yaml')).toBe(true);
+    expect(existingPaths.has('turbo.json')).toBe(true);
+
+    // The capped listing is manifest-first: root entries survive the cap.
+    expect(entries.length).toBe(2000);
+    const listed = new Set(entries.map((e) => e.path));
+    expect(listed.has('package.json')).toBe(true);
+    expect(listed.has('pnpm-workspace.yaml')).toBe(true);
+    expect(listed.has('turbo.json')).toBe(true);
+
+    // And WE truncated, so the caveat must fire.
+    expect(selfTruncated).toBe(true);
+  });
+
+  // A deeply-nested probe target (e.g. a subdir's package.json when we did NOT
+  // scope to it) is relevance-kept too, so nested manifests survive the cap.
+  it('keeps a nested probe-target file past the cap', () => {
+    const tree = [
+      ...Array.from({ length: 2500 }, (_, i) => ({ path: `noise/f${i}.txt`, type: 'blob' })),
+      { path: 'apps/web/package.json', type: 'blob' },
+    ];
+    const { entries, existingPaths, selfTruncated } = scopeEntries(tree, null);
+    expect(existingPaths.has('apps/web/package.json')).toBe(true);
+    expect(new Set(entries.map((e) => e.path)).has('apps/web/package.json')).toBe(true);
+    expect(selfTruncated).toBe(true);
   });
 });
