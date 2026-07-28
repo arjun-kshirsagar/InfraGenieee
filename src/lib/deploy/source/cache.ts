@@ -13,9 +13,29 @@
  * in-process `Map` does not, which is exactly what protects the budget across a
  * hot reload. No database, nothing to provision, no cost-safety question.
  *
- * Snapshots are stored PER (host, owner, repo, branch) at
- * `.cache/repos/<host>-<owner>-<repo>-<branch>.json` (gitignored under `.cache/`)
- * so a different branch of the same repo cannot serve a stale snapshot.
+ * Snapshots are stored PER ANALYSED SCOPE — (host, owner, repo, branch, subdir) —
+ * at `.cache/repos/<host>-<owner>-<repo>-<branch>-<subdir>.json` (gitignored
+ * under `.cache/`) so a different branch OR a different subdirectory of the same
+ * repo cannot serve each other's snapshot. The `subdir` component was added in
+ * fix task t_9833d2aa (F3 BLOCKER-1): a root paste and a `/prisma` subdir paste
+ * of the same repo+branch previously shared one file, so one user's repo scope
+ * was served to another user's request over real HTTP.
+ *
+ * ## Branch component: pinned vs. default (fixes MAJOR-1 and MAJOR-2)
+ *
+ * The key's branch component is the branch the user PINNED (`ref.branch`), or the
+ * sentinel `@default` when they pasted a branchless URL. It is deliberately NOT
+ * the `resolvedBranch`, because:
+ *
+ *   - A branchless paste (`github.com/o/r`) and a pinned paste of the same branch
+ *     (`github.com/o/r/tree/main`) are DIFFERENT requests that must not collide:
+ *     the pinned one has to keep its `/tree/main` in every deploy URL even when
+ *     `main` happens to be the default (MAJOR-1). Two keys → two files → no bleed.
+ *   - A branchless paste must be able to HIT its own earlier write. If we keyed on
+ *     `resolvedBranch` we would write under `main` but read under "no key",
+ *     so the ordinary paste never hit and every re-analysis burned a fresh
+ *     anonymous GitHub budget (MAJOR-2). Keying both read and write under
+ *     `@default` makes the ordinary paste hit.
  *
  * ## Miss conditions (a MISS returns null; the caller then re-fetches)
  *
@@ -23,7 +43,8 @@
  *   2. it is older than `SNAPSHOT_MAX_AGE_MINUTES` (by `fetchedAt`) — the user
  *      is actively pushing, so a long TTL would lie;
  *   3. it is not valid JSON, or fails `repoSnapshotSchema`;
- *   4. its ref/branch does not match what was asked for (a mis-filed snapshot).
+ *   4. its scope (host/owner/repo/subdir, and branch when pinned) does not match
+ *      what was asked for (a mis-filed snapshot).
  *
  * Reads NEVER throw: a corrupt or schema-mismatched file is treated as a miss,
  * so a schema change can never crash the app on a stale file — the same posture
@@ -63,6 +84,31 @@ function slug(part: string): string {
   return part.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
+/** Sentinel branch component for a branchless paste. `@` is illegal in the
+ *  slug alphabet, so it can never collide with a real (slugged) branch name —
+ *  a user cannot craft a `/tree/@default` paste that lands on this key. */
+const DEFAULT_BRANCH_KEY = '@default';
+
+/** Subdir component of the key when the paste has no subdir (the repo root).
+ *  A literal empty string would produce a `...--` filename that is easy to
+ *  mis-read; `_root` is unambiguous and — being slug-safe — cannot collide with
+ *  a real subdir (a real one is slugged, and `_root` is not a legal repo path a
+ *  user could paste because scopeEntries strips leading/trailing slashes). */
+const ROOT_SUBDIR_KEY = '_root';
+
+/**
+ * The cache key components for a ref, derived from the PARSED ref (never the
+ * resolved snapshot). `branch` is the pinned branch or `@default`; `subdir` is
+ * the pasted subdir or `_root`. Both are already slug-safe.
+ */
+function keyOf(ref: RepoRef, branch?: string): { branch: string; subdir: string } {
+  const pinned = branch ?? ref.branch ?? null;
+  return {
+    branch: pinned === null ? DEFAULT_BRANCH_KEY : slug(pinned),
+    subdir: ref.subdir ? slug(ref.subdir) : ROOT_SUBDIR_KEY,
+  };
+}
+
 /**
  * Filesystem cache for repo snapshots. Instantiate once and reuse; it holds no
  * state itself (each call hits the disk), so it is safe to share.
@@ -78,26 +124,35 @@ export class RepoSnapshotCache implements RepoSnapshotCacheContract {
     this.rootDir = options?.rootDir ?? defaultCacheDir();
   }
 
-  private filePath(ref: RepoRef, branch: string): string {
-    const name = `${slug(ref.host)}-${slug(ref.owner)}-${slug(ref.repo)}-${slug(branch)}.json`;
+  private filePath(ref: RepoRef, key: { branch: string; subdir: string }): string {
+    // `key.branch`/`key.subdir` are already slug-safe (see keyOf); host/owner/repo
+    // are slugged here. The subdir component is what fixes BLOCKER-1: root and
+    // subdir pastes of the same repo+branch now resolve to DIFFERENT files.
+    const name =
+      `${slug(ref.host)}-${slug(ref.owner)}-${slug(ref.repo)}` +
+      `-${key.branch}-${key.subdir}.json`;
     // Join defensively via basename: even though every component is already
     // slugged, a future caller cannot path-traverse out of the cache dir.
     return path.join(this.rootDir, path.basename(name));
   }
 
   /**
-   * Read the cached snapshot for a ref+branch, or `null` on any miss. Never
-   * throws. `branch` defaults to `ref.branch` (the branch the user pinned via
-   * `/tree/...`); when neither is known the caller has no key to hit on, so
-   * this returns null rather than guessing `main`.
+   * Read the cached snapshot for a ref's analysed scope, or `null` on any miss.
+   * Never throws.
+   *
+   * The scope is `(host, owner, repo, branch, subdir)`. `branch` defaults to the
+   * pinned branch (`ref.branch`); when the paste was branchless we read under the
+   * `@default` sentinel — the same key `set()` wrote to — so an ordinary paste
+   * hits its own earlier write (this is the MAJOR-2 fix; the old code returned
+   * null before ever touching the disk when no branch was pinned).
    */
   async get(ref: RepoRef, options?: { branch?: string }): Promise<RepoSnapshot | null> {
-    const branch = options?.branch ?? ref.branch ?? null;
-    if (branch === null) return null; // no key → nothing to hit
+    const key = keyOf(ref, options?.branch);
+    const pinnedBranch = options?.branch ?? ref.branch ?? null;
 
     let raw: string;
     try {
-      raw = await readFile(this.filePath(ref, branch), 'utf-8');
+      raw = await readFile(this.filePath(ref, key), 'utf-8');
     } catch {
       return null; // absent / unreadable → miss
     }
@@ -114,15 +169,25 @@ export class RepoSnapshotCache implements RepoSnapshotCacheContract {
 
     const snapshot = result.data;
 
-    // Guard against a mis-filed snapshot (wrong repo/branch in this key's file).
+    // Guard against a mis-filed snapshot: the file's scope must match what was
+    // asked for. This is defence in depth — the key already separates scopes —
+    // but a hand-tampered or stale-schema file must never be served as another
+    // scope's answer. We compare on the SCOPE-defining fields, including subdir
+    // (BLOCKER-1) and, when the user pinned a branch, the resolvedBranch.
     if (
       snapshot.ref.host !== ref.host ||
       snapshot.ref.owner !== ref.owner ||
-      snapshot.ref.repo !== ref.repo
+      snapshot.ref.repo !== ref.repo ||
+      (snapshot.ref.subdir ?? null) !== (ref.subdir ?? null)
     ) {
       return null;
     }
-    if (snapshot.resolvedBranch !== branch) return null;
+    // A pinned paste must have read the branch it pinned. A branchless paste
+    // (pinnedBranch === null) accepts whatever default the `@default` file
+    // resolved to — by construction that file holds the default-branch read.
+    if (pinnedBranch !== null && snapshot.resolvedBranch !== pinnedBranch) {
+      return null;
+    }
     // Age gate — the user is actively pushing, so a stale snapshot lies.
     if (isStale(snapshot.fetchedAt, this.now())) return null;
 
@@ -130,11 +195,13 @@ export class RepoSnapshotCache implements RepoSnapshotCacheContract {
   }
 
   /**
-   * Write a snapshot to its per-(host,owner,repo,branch) file, creating the
-   * cache dir if needed. The snapshot is re-validated before writing so a
-   * malformed one can never be persisted. Write failures are swallowed
-   * (best-effort cache) — a caller must still get its freshly-built snapshot
-   * even if the disk is read-only.
+   * Write a snapshot to its per-scope file, creating the cache dir if needed.
+   * The key comes from the snapshot's OWN parsed ref, so a branchless read
+   * (`@default`) and a pinned read (`main`) each hit the file that a matching
+   * paste wrote. The snapshot is re-validated before writing so a malformed one
+   * can never be persisted. Write failures are swallowed (best-effort cache) — a
+   * caller must still get its freshly-built snapshot even if the disk is
+   * read-only.
    */
   async set(snapshot: RepoSnapshot): Promise<void> {
     const validated = repoSnapshotSchema.safeParse(snapshot);
@@ -149,13 +216,12 @@ export class RepoSnapshotCache implements RepoSnapshotCacheContract {
     }
 
     const snap = validated.data;
+    // Key from the snapshot's own parsed ref (pinned branch or @default, plus
+    // subdir) — this is the same key a matching paste will read under.
+    const key = keyOf(snap.ref);
     try {
       await mkdir(this.rootDir, { recursive: true });
-      await writeFile(
-        this.filePath(snap.ref, snap.resolvedBranch),
-        JSON.stringify(snap, null, 2),
-        'utf-8',
-      );
+      await writeFile(this.filePath(snap.ref, key), JSON.stringify(snap, null, 2), 'utf-8');
     } catch (err) {
       console.warn(
         '[deploy.cache] failed to write snapshot for %s/%s: %s',
@@ -170,4 +236,4 @@ export class RepoSnapshotCache implements RepoSnapshotCacheContract {
 /** Shared instance for the analyze route. */
 export const repoSnapshotCache = new RepoSnapshotCache();
 
-export const _internal = { defaultCacheDir, isStale, slug };
+export const _internal = { defaultCacheDir, isStale, slug, keyOf, DEFAULT_BRANCH_KEY, ROOT_SUBDIR_KEY };

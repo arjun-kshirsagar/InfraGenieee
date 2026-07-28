@@ -132,11 +132,19 @@ export async function buildDeployPlan(
     await cache?.set(snapshot);
   }
 
-  // 3. Detect — pure. Uses the REAL ref from the snapshot (the source may have
-  //    resolved an ambiguous branch/subdir), not the parsed one.
+  // 3. Detect — pure. Detection is a function of the snapshot's CONTENTS
+  //    (entries + probed files), which is all the snapshot is trusted for.
   const detection = detectStack(snapshot);
 
-  return assemble(detection, snapshot.ref, prdContext, snapshot.defaultBranch, now());
+  // The plan's IDENTITY (repo, branch, subdir, and therefore every deploy URL)
+  // comes from the PARSED ref, never `snapshot.ref`. Treating the snapshot as
+  // identity was F3 BLOCKER-1 / MAJOR-1: a cache entry written by another scope
+  // (root vs. subdir, or branchless-resolved-to-main vs. pinned /tree/main)
+  // would otherwise stamp the wrong repo/branch/subdir onto this user's plan and
+  // hand them deploy buttons for code they never pasted. The snapshot is
+  // contents; the ref is identity. `defaultBranch` is a fact about the repo, so
+  // it legitimately comes from the snapshot.
+  return assemble(detection, ref, prdContext, snapshot.defaultBranch, now());
 }
 
 /**

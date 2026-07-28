@@ -53,10 +53,15 @@ function snapshot(overrides: Partial<RepoSnapshot> = {}): RepoSnapshot {
   };
 }
 
-function cacheFilePath(r: RepoRef, branch: string): string {
+/** Mirror of the cache's own key → filename mapping, so a test can plant a file
+ *  under the exact name a real paste would read. Uses the cache's own `keyOf`
+ *  so the two can never drift. `branch`/`subdir` here are the RAW values (pinned
+ *  branch or null; subdir or null) exactly as they'd appear on a parsed ref. */
+function cacheFilePath(r: RepoRef): string {
+  const key = _internal.keyOf(r);
   const name = `${_internal.slug(r.host)}-${_internal.slug(r.owner)}-${_internal.slug(
     r.repo,
-  )}-${_internal.slug(branch)}.json`;
+  )}-${key.branch}-${key.subdir}.json`;
   return path.join(rootDir, name);
 }
 
@@ -69,13 +74,14 @@ afterEach(() => {
 });
 
 describe('RepoSnapshotCache — fresh hit', () => {
-  it('round-trips a written snapshot (set → get) as a hit, keyed by resolvedBranch', async () => {
+  it('round-trips a branchless write and hits on a branchless read (MAJOR-2)', async () => {
     const cache = newCache();
     const snap = snapshot();
     await cache.set(snap);
-    // The user did not pin a branch, so get() falls back to nothing — pass the
-    // resolved branch explicitly, as the analyze route will.
-    const read = await cache.get(ref(), { branch: 'main' });
+    // The user did not pin a branch. Under the @default key a branchless paste
+    // reads back its own write — the fix for MAJOR-2 (the old code returned null
+    // before touching the disk whenever no branch was pinned).
+    const read = await cache.get(ref());
     expect(read).not.toBeNull();
     expect(read?.ref.owner).toBe('acme');
     expect(read?.files['package.json']).toBe('{"name":"store"}');
@@ -94,14 +100,14 @@ describe('RepoSnapshotCache — fresh hit', () => {
 });
 
 describe('RepoSnapshotCache — miss conditions', () => {
-  it('is a MISS when the file is absent', async () => {
+  it('is a MISS when the file is absent (pinned)', async () => {
     const cache = newCache();
     expect(await cache.get(ref(), { branch: 'main' })).toBeNull();
   });
 
-  it('is a MISS when no branch can be resolved (no key to hit on)', async () => {
+  it('is a MISS when a branchless read finds nothing written', async () => {
     const cache = newCache();
-    // No pinned branch and no branch option → no key, so null (never guesses main).
+    // No pinned branch and no file under the @default key → miss (never guesses).
     expect(await cache.get(ref())).toBeNull();
   });
 
@@ -111,47 +117,48 @@ describe('RepoSnapshotCache — miss conditions', () => {
     await newCache(FIXED_NOW).set(snapshot({ fetchedAt: staleAt }));
 
     const laterNow = FIXED_NOW + (SNAPSHOT_MAX_AGE_MINUTES + 1) * 60 * 1000;
-    const read = await newCache(laterNow).get(ref(), { branch: 'main' });
+    const read = await newCache(laterNow).get(ref());
     expect(read).toBeNull();
   });
 
   it('is still a HIT just inside the TTL window', async () => {
     await newCache(FIXED_NOW).set(snapshot());
     const justInside = FIXED_NOW + (SNAPSHOT_MAX_AGE_MINUTES - 1) * 60 * 1000;
-    const read = await newCache(justInside).get(ref(), { branch: 'main' });
+    const read = await newCache(justInside).get(ref());
     expect(read).not.toBeNull();
   });
 
   it('is a MISS on corrupt JSON — never throws', async () => {
-    writeFileSync(cacheFilePath(ref(), 'main'), '{ this is not json', 'utf-8');
+    writeFileSync(cacheFilePath(ref()), '{ this is not json', 'utf-8');
     const cache = newCache();
-    await expect(cache.get(ref(), { branch: 'main' })).resolves.toBeNull();
+    await expect(cache.get(ref())).resolves.toBeNull();
   });
 
   it('is a MISS on a schema-mismatched file — never throws', async () => {
     writeFileSync(
-      cacheFilePath(ref(), 'main'),
+      cacheFilePath(ref()),
       JSON.stringify({ ref: { host: 'github' }, notASnapshot: true }),
       'utf-8',
     );
     const cache = newCache();
-    await expect(cache.get(ref(), { branch: 'main' })).resolves.toBeNull();
+    await expect(cache.get(ref())).resolves.toBeNull();
   });
 
   it('is a MISS when the file holds a snapshot for a different repo (mis-filed)', async () => {
     // Valid snapshot for a DIFFERENT repo written under this key's filename.
     const other = snapshot({ ref: ref({ owner: 'other', repo: 'thing' }) });
-    writeFileSync(cacheFilePath(ref(), 'main'), JSON.stringify(other), 'utf-8');
+    writeFileSync(cacheFilePath(ref()), JSON.stringify(other), 'utf-8');
     const cache = newCache();
-    expect(await cache.get(ref(), { branch: 'main' })).toBeNull();
+    expect(await cache.get(ref())).toBeNull();
   });
 
-  it('is a MISS when resolvedBranch does not match the requested branch', async () => {
-    const snap = snapshot({ resolvedBranch: 'canary' });
-    // Force it into the 'main' key file so the branch guard is what rejects it.
-    writeFileSync(cacheFilePath(ref(), 'main'), JSON.stringify(snap), 'utf-8');
+  it('is a MISS when resolvedBranch does not match the pinned branch', async () => {
+    // A pinned 'main' read must reject a file whose resolvedBranch is 'canary'.
+    const pinned = ref({ branch: 'main' });
+    const snap = snapshot({ ref: pinned, resolvedBranch: 'canary' });
+    writeFileSync(cacheFilePath(pinned), JSON.stringify(snap), 'utf-8');
     const cache = newCache();
-    expect(await cache.get(ref(), { branch: 'main' })).toBeNull();
+    expect(await cache.get(pinned)).toBeNull();
   });
 });
 
