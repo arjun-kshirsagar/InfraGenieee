@@ -74,6 +74,16 @@ export interface RecommendResult {
   /** True only when the PRD context actually changed a verdict, score, reason
    *  or caveat. `false` when no context was passed. */
   usedPrdContext: boolean;
+  /**
+   * The needs the reasoning actually reasoned from: `detection.needs` plus any
+   * PRD-supplied ones (docs §6 `foldPrdNeeds`). This is what the Render config
+   * gate and the fit reasoning use, so the caller MUST feed the SAME set to
+   * `generateConfigs` — otherwise the Render card can promise a managed Postgres
+   * the blueprint omits (F3 BLOCKER-3). Never larger than the repo's needs at
+   * `unknown` confidence, where the schema forbids needs and `foldPrdNeeds`
+   * skips the PRD entirely — so `effectiveNeeds` is `[]` there too.
+   */
+  effectiveNeeds: ServiceNeed[];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -582,6 +592,9 @@ export function recommendProviders(
       primary: null,
       assumptions: capAssumptions(assumptions),
       usedPrdContext: false,
+      // Unknown confidence: the schema forbids needs and `foldPrdNeeds` was never
+      // consulted, so there is nothing effective to surface.
+      effectiveNeeds: [],
     };
   }
 
@@ -642,6 +655,10 @@ export function recommendProviders(
     primary,
     assumptions: capAssumptions(assumptions),
     usedPrdContext: prdContext ? usedPrdContext : false,
+    // Surface the SAME needs the reasoning and the Render config gate used, so
+    // the caller can feed an effective-needs detection to `generateConfigs` and
+    // the blueprint can never disagree with the card (F3 BLOCKER-3).
+    effectiveNeeds: prdNeeds.effectiveNeeds,
   };
 }
 

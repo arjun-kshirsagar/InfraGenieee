@@ -28,6 +28,7 @@ import { buildDeployPlan, type BuildDeployPlanDeps } from './plan';
 import { RepoError } from './repo-seam';
 import type { RepoSource, RepoSnapshotCache } from './repo-seam';
 import { FIXTURES } from './detect/__fixtures__';
+import type { DeployPrdContext } from '@/types/deploy';
 
 /* -------------------------------------------------------------------------- */
 /* Test doubles                                                               */
@@ -274,5 +275,111 @@ describe('buildDeployPlan — snapshot cache', () => {
     expect(calls).toHaveLength(1); // source hit once
     expect(cache.set).toHaveBeenCalledTimes(1);
     expect(cache.set).toHaveBeenCalledWith(snapshot);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* PRD-supplied needs reach the blueprint (F3 BLOCKER-3 regression)           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * BLOCKER-3: `recommendProviders` reasoned from `effectiveNeeds` (repo needs +
+ * PRD-supplied ones) but `generateConfigs` was fed the RAW detection, so a
+ * PRD-supplied database made the Render card promise a managed Postgres while
+ * the emitted `render.yaml` had no `databases:` block. Following our own
+ * instructions produced a deploy with no database.
+ *
+ * The fix threads the same effective-needs detection into `generateConfigs`.
+ * These tests pin the invariant the reviewer asked for: whatever a fit's
+ * reasoning references, the blueprint must deliver.
+ */
+describe('buildDeployPlan — PRD-supplied needs reach the blueprint (BLOCKER-3)', () => {
+  /** The repro PRD: a static docs site whose PRD lists a Postgres datastore. */
+  const prdWithDatastore: DeployPrdContext = {
+    title: 'Static docs site with comments',
+    context: {
+      userScale: 'very-large',
+      trafficPattern: 'spiky',
+      budgetBand: 'free-tier',
+      timelineWeeks: 6,
+    },
+    components: [
+      {
+        name: 'Comments DB',
+        kind: 'datastore',
+        responsibility: 'store reader comments',
+        technology: 'Postgres',
+      },
+      { name: 'Docs site', kind: 'client', responsibility: 'serve docs', technology: 'Jekyll' },
+    ],
+  };
+
+  it('emits a databases: block + DATABASE_URL fromDatabase when the PRD supplies a datastore', async () => {
+    // Jekyll fixture = static site, repo shows NO database need (as in the repro).
+    const { source } = stubSource(fixture('jekyll'));
+    const plan = await buildDeployPlan('https://github.com/jekyll/minima', deps(source), {
+      prdContext: prdWithDatastore,
+    });
+
+    // The whole plan still parses against the contract.
+    expect(deployPlanSchema.safeParse(plan).success).toBe(true);
+    expect(plan.usedPrdContext).toBe(true);
+
+    // The PRD-supplied database is now first-class in the detection the UI shows…
+    expect(plan.detection.needs).toContain('database');
+    // …and its origin is disclosed as coming from the PRD, not the code.
+    expect(
+      plan.assumptions.some(
+        (a) => a.toLowerCase().includes('prd') && a.toLowerCase().includes('database'),
+      ),
+    ).toBe(true);
+
+    // A render.yaml artifact exists and actually carries the managed DB.
+    const render = plan.configs.find((c) => c.provider === 'render');
+    expect(render).toBeDefined();
+    const yaml = render!.content;
+    expect(yaml).toContain('databases:');
+    expect(yaml).toContain('DATABASE_URL');
+    expect(yaml).toContain('fromDatabase');
+    expect(yaml).toContain('connectionString');
+
+    // Safety: the blueprint STILL contains no literal env value and no secret,
+    // and every service keeps autoDeploy: false (acceptance criteria).
+    expect(yaml).not.toMatch(/DATABASE_URL:\s*['"]?postgres/i);
+    expect(yaml).not.toMatch(/\bsync:\s*true\b/);
+    expect(yaml).toContain("autoDeploy: false");
+    expect(yaml).not.toContain('autoDeploy: true');
+  });
+
+  it('INVARIANT: if any fit references a database, the render.yaml must contain databases:', async () => {
+    const { source } = stubSource(fixture('jekyll'));
+    const plan = await buildDeployPlan('https://github.com/jekyll/minima', deps(source), {
+      prdContext: prdWithDatastore,
+    });
+
+    const anyFitMentionsDatabase = plan.fits.some((f) =>
+      [...f.reasons, ...f.caveats].some((line) => line.toLowerCase().includes('database')),
+    );
+
+    if (anyFitMentionsDatabase) {
+      const render = plan.configs.find((c) => c.provider === 'render');
+      expect(render, 'a fit references a database, so a render.yaml must exist').toBeDefined();
+      expect(
+        render!.content,
+        'a fit references a database, so the blueprint must provision one',
+      ).toContain('databases:');
+    }
+    // Guard the test itself: the repro payload DOES make a fit mention a database.
+    expect(anyFitMentionsDatabase).toBe(true);
+  });
+
+  it('without a PRD, the same static repo gets NO database (no false positive)', async () => {
+    const { source } = stubSource(fixture('jekyll'));
+    const plan = await buildDeployPlan('https://github.com/jekyll/minima', deps(source));
+
+    expect(plan.detection.needs).not.toContain('database');
+    const render = plan.configs.find((c) => c.provider === 'render');
+    // A plain static site may still emit a render.yaml, but never a databases: block.
+    if (render) expect(render.content).not.toContain('databases:');
   });
 });

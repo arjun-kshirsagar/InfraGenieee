@@ -160,17 +160,39 @@ function assemble(
   generatedAt: string,
 ): DeployPlan {
   // 4. Provider fit — pure. Always three fits; primary null under unknown.
-  const { fits, primary, assumptions, usedPrdContext } = recommendProviders(detection, ref, {
-    prdContext,
-    defaultBranch,
-  });
+  const { fits, primary, assumptions, usedPrdContext, effectiveNeeds } = recommendProviders(
+    detection,
+    ref,
+    {
+      prdContext,
+      defaultBranch,
+    },
+  );
 
-  // 5. Generated configs — pure. An unknown detection yields none.
-  const configs = generateConfigs(detection, ref);
+  // The needs the fit reasoning actually reasoned from (repo needs + any the PRD
+  // supplied). We build ONE effective-needs detection and use it for BOTH the
+  // plan's `detection` and `generateConfigs`, so the Render card, the UI's
+  // "Managed services needed" list, and the emitted blueprint can never
+  // disagree (F3 BLOCKER-3). The PRD attribution is not lost: `foldPrdNeeds`
+  // records a "this came from the PRD, not the code" assumption for each
+  // supplied need, and those surface in `assumptions` below.
+  //
+  // Safe against the schema: at `unknown` confidence `recommendProviders`
+  // returns `effectiveNeeds: []` and never folds the PRD, so this is a no-op
+  // there and `stackDetectionSchema`'s "unknown ⇒ no needs" rule still holds.
+  const effectiveDetection: StackDetection =
+    effectiveNeeds.length === detection.needs.length
+      ? detection
+      : { ...detection, needs: effectiveNeeds };
+
+  // 5. Generated configs — pure. An unknown detection yields none. Uses the
+  //    EFFECTIVE-needs detection so whatever a fit promises, the blueprint
+  //    delivers (e.g. a PRD-supplied database ⇒ a `databases:` block).
+  const configs = generateConfigs(effectiveDetection, ref);
 
   const plan = {
     repo: ref,
-    detection,
+    detection: effectiveDetection,
     fits,
     primary,
     assumptions,

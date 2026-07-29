@@ -200,14 +200,17 @@ export function generateRenderYaml(detection: StackDetection, ref: RepoRef): Con
   y.raw('services:');
 
   if (isStatic) {
-    emitStaticService(y, detection, ref, serviceName);
+    emitStaticService(y, detection, ref, serviceName, { needsDatabase, needsCache, baseName: serviceName });
   } else {
     emitWebService(y, detection, ref, serviceName, { needsDatabase, needsCache, baseName: serviceName });
   }
 
   // A cache need → a Render Key Value (Redis) store. It lives in `services`,
   // NOT in `databases` (which is Postgres-only), and REQUIRES `ipAllowList`.
-  if (needsCache && !isStatic) {
+  // Emitted for a static site too when the need exists (e.g. a PRD-supplied
+  // cache): the store must actually exist for the `fromService` reference above
+  // to resolve.
+  if (needsCache) {
     emitKeyValueService(y, `${serviceName}-cache`);
   }
 
@@ -256,7 +259,13 @@ export function generateRenderYaml(detection: StackDetection, ref: RepoRef): Con
 /* Service emitters                                                           */
 /* -------------------------------------------------------------------------- */
 
-function emitStaticService(y: Y, detection: StackDetection, ref: RepoRef, name: string): void {
+function emitStaticService(
+  y: Y,
+  detection: StackDetection,
+  ref: RepoRef,
+  name: string,
+  opts: { needsDatabase: boolean; needsCache: boolean; baseName: string },
+): void {
   y.kv(2, '- type', 'web');
   y.kvBare(4, 'runtime', 'static');
   y.kv(4, 'name', name);
@@ -279,6 +288,13 @@ function emitStaticService(y: Y, detection: StackDetection, ref: RepoRef, name: 
   }
 
   y.kvBare(4, 'autoDeploy', 'false');
+
+  // A managed-service need (typically PRD-supplied for a static site) must be
+  // wired to the site, or the `databases:`/`keyvalue` entry below dangles with
+  // nothing referencing it. Static sites accept `envVars` (available to the
+  // build), so we emit the same `fromDatabase`/`fromService` references — never
+  // a literal value, never a secret.
+  emitWebEnvVars(y, opts);
 }
 
 function emitWebService(
