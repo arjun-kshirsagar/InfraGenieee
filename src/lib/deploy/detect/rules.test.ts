@@ -166,6 +166,27 @@ describe('detectNodeVersion', () => {
     const v = detectNodeVersion(probeOf({ '.nvmrc': '20.11.0\n' }));
     expect(v.nodeVersion).toBe('20.11.0');
   });
+  it('.nvmrc with a leading v is normalized (v18.17.1 → 18.17.1)', () => {
+    const v = detectNodeVersion(probeOf({ '.nvmrc': 'v18.17.1\n' }));
+    expect(v.nodeVersion).toBe('18.17.1');
+    // The excerpt cites what the file actually said, verbatim.
+    expect(v.signal!.excerpt).toBe('v18.17.1');
+  });
+  it('.nvmrc alias `node` (nvm "latest") is NOT surfaced as a version (MINOR-3)', () => {
+    const v = detectNodeVersion(probeOf({ '.nvmrc': 'node\n' }));
+    expect(v.nodeVersion).toBeNull();
+    expect(v.signal).toBeNull();
+  });
+  it('.nvmrc alias `lts/*` is NOT surfaced as a version (MINOR-3)', () => {
+    const v = detectNodeVersion(probeOf({ '.nvmrc': 'lts/*\n' }));
+    expect(v.nodeVersion).toBeNull();
+  });
+  it('.nvmrc alias falls through to .tool-versions when both are present (MINOR-3)', () => {
+    const v = detectNodeVersion(
+      probeOf({ '.nvmrc': 'lts/hydrogen\n', '.tool-versions': 'nodejs 20.11.0\n' }),
+    );
+    expect(v.nodeVersion).toBe('20.11.0');
+  });
   it('.tool-versions nodejs line', () => {
     const v = detectNodeVersion(probeOf({ '.tool-versions': 'nodejs 20.11.0\npython 3.12\n' }));
     expect(v.nodeVersion).toBe('20.11.0');

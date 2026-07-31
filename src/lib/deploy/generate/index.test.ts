@@ -31,6 +31,7 @@ import {
   generateVercelJson,
   generateNetlifyToml,
 } from '@/lib/deploy/generate';
+import { renderBlueprintHasPlaceholders } from '@/lib/deploy/generate/render-yaml';
 import {
   configArtifactSchema,
   type AppShape,
@@ -460,6 +461,133 @@ describe('generateRenderYaml — null commands become TODO comments', () => {
     // Must still parse.
     parseRender(artifact);
     expect(artifact.content).toContain('# TODO:');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* MAJOR-3: an incomplete blueprint (placeholder command) is NOT required:true */
+/* -------------------------------------------------------------------------- */
+
+describe('generateRenderYaml — placeholder commands flip required:false (MAJOR-3)', () => {
+  // The jekyll/minima repro: a static site with no npm scripts, so both the
+  // build command and the output dir are legitimately null. The blueprint we
+  // emit has placeholder values; we must NOT tell the user it is ready to
+  // commit-and-deploy.
+  const staticNoBuild = detection({
+    framework: 'other',
+    runtime: 'static',
+    appShape: 'static',
+    needs: [],
+    build: NO_BUILD,
+    signals: [strongSignal('file:_config.yml')],
+  });
+
+  it('a static site with no detectable build/output is required:false with a clear why', () => {
+    const artifact = generateRenderYaml(staticNoBuild, ref({ repo: 'minima' }));
+    assertSchema(artifact);
+    expect(renderBlueprintHasPlaceholders(staticNoBuild)).toBe(true);
+    expect(artifact.required).toBe(false);
+    // The why must plainly tell the user to fill something in first.
+    expect(artifact.why.toLowerCase()).toMatch(/placeholder|todo|fill|before you deploy/);
+    // And the content still carries the visible TODO markers + parses.
+    expect(artifact.content).toContain('# TODO:');
+    parseRender(artifact);
+  });
+
+  it('a web app with no detectable build/start command is required:false', () => {
+    const d = detection({
+      framework: 'express',
+      runtime: 'node',
+      appShape: 'api-only',
+      needs: [],
+      build: NO_BUILD,
+      signals: [strongSignal('dep:express')],
+    });
+    const artifact = generateRenderYaml(d, ref());
+    assertSchema(artifact);
+    expect(renderBlueprintHasPlaceholders(d)).toBe(true);
+    expect(artifact.required).toBe(false);
+  });
+
+  it('a fully-known web blueprint stays required:true (unchanged)', () => {
+    const d = detection({
+      framework: 'express',
+      runtime: 'node',
+      appShape: 'fullstack',
+      needs: ['database'],
+      build: {
+        installCommand: 'npm ci',
+        buildCommand: 'npm run build',
+        outputDir: null,
+        startCommand: 'npm start',
+        nodeVersion: '20',
+      },
+      signals: [strongSignal('dep:express')],
+    });
+    const artifact = generateRenderYaml(d, ref());
+    assertSchema(artifact);
+    expect(renderBlueprintHasPlaceholders(d)).toBe(false);
+    expect(artifact.required).toBe(true);
+  });
+
+  it('a fully-known static blueprint stays required:true (unchanged)', () => {
+    const d = detection({
+      framework: 'vite',
+      runtime: 'static',
+      appShape: 'static',
+      needs: [],
+      build: {
+        installCommand: 'npm ci',
+        buildCommand: 'npm run build',
+        outputDir: 'dist',
+        startCommand: null,
+        nodeVersion: null,
+      },
+      signals: [strongSignal('dep:vite')],
+    });
+    const artifact = generateRenderYaml(d, ref());
+    assertSchema(artifact);
+    expect(renderBlueprintHasPlaceholders(d)).toBe(false);
+    expect(artifact.required).toBe(true);
+  });
+
+  it('a Docker-only web blueprint invents no command → required:true (unchanged)', () => {
+    const d = detection({
+      framework: 'other',
+      runtime: 'docker',
+      appShape: 'fullstack',
+      needs: [],
+      build: NO_BUILD,
+      existing: { vercel: false, netlify: false, render: false, dockerfile: true },
+      signals: [
+        { ...strongSignal('file:Dockerfile'), kind: 'file-present', path: 'Dockerfile', excerpt: 'Dockerfile' },
+      ],
+    });
+    const artifact = generateRenderYaml(d, ref());
+    assertSchema(artifact);
+    expect(renderBlueprintHasPlaceholders(d)).toBe(false);
+    expect(artifact.required).toBe(true);
+  });
+
+  it('a worker/cron need forces required:false (start command is unknowable)', () => {
+    const d = detection({
+      framework: 'express',
+      runtime: 'node',
+      appShape: 'fullstack',
+      needs: ['background-worker'],
+      build: {
+        installCommand: 'npm ci',
+        buildCommand: 'npm run build',
+        outputDir: null,
+        startCommand: 'npm start',
+        nodeVersion: '20',
+      },
+      signals: [strongSignal('dep:bullmq')],
+    });
+    const artifact = generateRenderYaml(d, ref());
+    assertSchema(artifact);
+    expect(renderBlueprintHasPlaceholders(d)).toBe(true);
+    expect(artifact.required).toBe(false);
   });
 });
 

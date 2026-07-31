@@ -48,6 +48,7 @@ import {
   type StackDetection,
 } from '@/types/deploy';
 import { buildDeployUrl } from '@/lib/deploy/deploy-url';
+import { renderBlueprintHasPlaceholders } from '@/lib/deploy/generate/render-yaml';
 
 /* -------------------------------------------------------------------------- */
 /* Public result shape                                                        */
@@ -368,7 +369,27 @@ function applyRenderConfigGate(detection: StackDetection, r: Draft): void {
     detection.needs.length > 0 ||
     detection.runtime === 'docker';
 
-  if (!needsBlueprint) return;
+  // MAJOR-3: a static site ALSO gets a render.yaml generated (a `type: web` +
+  // `runtime: static` service), and its buildCommand/staticPublishPath can be a
+  // placeholder we couldn't detect (jekyll/minima: a Ruby site with no npm
+  // scripts). Such a site is NOT a `needsBlueprint` case — Render's static
+  // button works from the dashboard without a committed blueprint, so we must
+  // NOT flip `requiresConfig` or tell the user to commit the file. But we DO owe
+  // them the warning that the blueprint we generated is incomplete, so it lands
+  // whether or not `needsBlueprint` is true. `existing.render` short-circuits
+  // both paths — we never comment on a file the user already has.
+  const isStatic = detection.appShape === 'static' || detection.runtime === 'static';
+  const emitsBlueprint = needsBlueprint || isStatic;
+  const hasPlaceholders = emitsBlueprint && renderBlueprintHasPlaceholders(detection);
+
+  if (!needsBlueprint) {
+    // Static (or otherwise no-blueprint) path: leave `requiresConfig` alone, but
+    // still warn if the generated blueprint carries # TODO placeholders.
+    if (hasPlaceholders && !detection.existing.render) {
+      addCaveat(r, PLACEHOLDER_CAVEAT);
+    }
+    return;
+  }
 
   if (detection.existing.render) {
     r.requiresConfig = false;
@@ -382,8 +403,23 @@ function applyRenderConfigGate(detection: StackDetection, r: Draft): void {
       r,
       'Render reads a render.yaml blueprint from your repo; commit the one we generate before using the button, or the deploy will not be configured correctly.',
     );
+    // When we couldn't detect a build/start command, the blueprint we generate
+    // carries placeholder (# TODO) values. Surface that HERE — the caveat renders
+    // BEFORE the deploy button — so the user is warned they must fill it in
+    // first, rather than committing-and-clicking an incomplete file that
+    // "succeeds" and serves an empty site. Uses the same predicate the generator
+    // uses to flip the artifact's `required` flag, so the two agree.
+    if (hasPlaceholders) {
+      addCaveat(r, PLACEHOLDER_CAVEAT);
+    }
   }
 }
+
+/** The MAJOR-3 warning: the generated blueprint has # TODO placeholders the
+ *  user must fill in before the deploy actually builds anything. Rendered as a
+ *  caveat, which the fit card shows ABOVE the deploy button. Kept ≤300 chars. */
+const PLACEHOLDER_CAVEAT =
+  "We couldn't detect your build/start command, so the generated render.yaml has placeholder values marked # TODO — fill those in before you deploy, or the button will build nothing and serve an empty site.";
 
 /* -------------------------------------------------------------------------- */
 /* PRD sharpening (docs §6) — sharpens, never overrides a file signal         */

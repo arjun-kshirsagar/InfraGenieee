@@ -83,6 +83,54 @@ function shouldEmitRenderYaml(detection: StackDetection): boolean {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Blueprint completeness — do we have to fall back to a placeholder command?  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * True when the blueprint we would emit contains at least one PLACEHOLDER value
+ * the user must replace before the deploy actually works — a `buildCommand` /
+ * `startCommand` we couldn't detect (emitted as `echo "TODO: ..."`), a
+ * `staticPublishPath` we had to guess (`./dist`), or a worker/cron service whose
+ * start command is inherently unknowable.
+ *
+ * This is the single source of truth for "the blueprint is incomplete". The
+ * generator uses it to flip `required`/`why`, and `recommend` uses it (via the
+ * same detection) to warn the user BEFORE the deploy button. They MUST agree,
+ * so the placeholder logic lives here and only here — it mirrors, branch for
+ * branch, what the service emitters below actually write.
+ *
+ * MAJOR-3: shipping `required: true` for a blueprint whose `buildCommand` is
+ * `echo "TODO: ..."` told the user "commit this and click deploy" for a file we
+ * knew was incomplete; the deploy then succeeded and served an empty site
+ * because `echo` exits 0. A silent wrong result is worse than a visible one.
+ */
+export function renderBlueprintHasPlaceholders(detection: StackDetection): boolean {
+  const isStatic = detection.appShape === 'static' || detection.runtime === 'static';
+
+  if (isStatic) {
+    // emitStaticService: buildCommand and staticPublishPath both fall back.
+    if (!detection.build.buildCommand) return true;
+    if (!detection.build.outputDir) return true;
+    return false;
+  }
+
+  // A background-worker or cron service always emits a TODO start command (and,
+  // for cron, a placeholder schedule) — those values are unknowable from
+  // detection, so any such service makes the blueprint incomplete.
+  if (detection.needs.includes('background-worker')) return true;
+  if (detection.needs.includes('cron')) return true;
+
+  // emitWebService: a Docker runtime invents no build/start command, so it is
+  // never a placeholder. Every other runtime needs both filled in.
+  const runtime = chooseRuntime(detection);
+  if (runtime.value === 'docker') return false;
+
+  if (!(detection.build.buildCommand ?? detection.build.installCommand)) return true;
+  if (!detection.build.startCommand) return true;
+  return false;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Runtime mapping — StackDetection.runtime → Render `runtime` value          */
 /* -------------------------------------------------------------------------- */
 
@@ -240,7 +288,9 @@ export function generateRenderYaml(detection: StackDetection, ref: RepoRef): Con
 
   const content = y.toString();
 
-  const why = renderWhy(detection, { needsDatabase, needsCache, isStatic });
+  const hasPlaceholders = renderBlueprintHasPlaceholders(detection);
+
+  const why = renderWhy(detection, { needsDatabase, needsCache, isStatic, hasPlaceholders });
 
   const artifact: ConfigArtifact = {
     provider: 'render',
@@ -248,7 +298,13 @@ export function generateRenderYaml(detection: StackDetection, ref: RepoRef): Con
     language: 'yaml',
     content,
     why,
-    required: true,
+    // MAJOR-3: a blueprint with a placeholder build/start command (or a guessed
+    // publish dir, or a worker/cron TODO) is NOT ready to deploy as-is. Marking
+    // it `required: false` stops the UI from labelling it "Required" and telling
+    // the user to commit-and-click a file we know is incomplete — `why` and the
+    // Render fit's caveat both say plainly that they must fill it in first. A
+    // fully-known blueprint stays `required: true` (unchanged).
+    required: !hasPlaceholders,
   };
 
   // Self-validate against the contract so a malformed artifact never escapes.
@@ -473,8 +529,20 @@ function sanitizeName(repo: string): string {
 
 function renderWhy(
   detection: StackDetection,
-  opts: { needsDatabase: boolean; needsCache: boolean; isStatic: boolean },
+  opts: { needsDatabase: boolean; needsCache: boolean; isStatic: boolean; hasPlaceholders: boolean },
 ): string {
+  // MAJOR-3: when the blueprint contains a placeholder we couldn't fill, say so
+  // FIRST and plainly. The user must edit the file before it will deploy — we do
+  // NOT want them to commit-and-click a blueprint whose build command is a TODO
+  // (that "succeeds" and serves an empty site). This takes priority over the
+  // provider-need copy below because it is a precondition for the file working
+  // at all.
+  if (opts.hasPlaceholders) {
+    if (opts.isStatic) {
+      return "We couldn't detect your build command and/or the folder that holds your built files, so this blueprint has placeholder values (marked # TODO). Fill them in before you deploy — as-is, the build does nothing and Render would publish an empty site.";
+    }
+    return "We couldn't detect your build and/or start command, so this blueprint has placeholder values (marked # TODO). Replace them with your real commands before you deploy — as-is, the deploy will succeed but your app won't actually build or start.";
+  }
   if (opts.needsDatabase) {
     return "Render reads this blueprint from your repo; without it the Deploy-to-Render button can't know you need a managed Postgres database alongside your service.";
   }

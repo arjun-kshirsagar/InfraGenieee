@@ -871,18 +871,31 @@ export function detectNodeVersion(probe: Probe): { nodeVersion: string | null; s
   // .nvmrc
   const nvmrc = probe.content('.nvmrc');
   if (nvmrc !== undefined && nvmrc.trim().length > 0) {
-    const v = nvmrc.trim();
-    return {
-      nodeVersion: v,
-      signal: {
-        id: 'node:nvmrc',
-        kind: 'file-content',
-        path: '.nvmrc',
-        excerpt: v.slice(0, 40),
-        implies: '.nvmrc → Node version',
-        weight: 'weak',
-      },
-    };
+    const raw = nvmrc.trim();
+    // MINOR-3: nvm accepts non-version ALIASES in .nvmrc — `node` (latest),
+    // `lts/*`, `lts/hydrogen`, `iojs`, `stable`, `system`, `default`, `unstable`.
+    // Those are not version strings; passing e.g. `node` through as
+    // `nodeVersion` would be an invalid value if it ever reached a provider
+    // hint. Accept only something that starts with a digit (with an optional
+    // leading `v`), e.g. `20`, `v18.17.1`, `18.17`. Anything else is a
+    // resolvable alias we deliberately do not surface as a concrete version.
+    const versionLike = /^v?\d/.test(raw);
+    if (versionLike) {
+      const v = raw.replace(/^v/, '');
+      return {
+        nodeVersion: v,
+        signal: {
+          id: 'node:nvmrc',
+          kind: 'file-content',
+          path: '.nvmrc',
+          excerpt: raw.slice(0, 40),
+          implies: '.nvmrc → Node version',
+          weight: 'weak',
+        },
+      };
+    }
+    // A non-version alias: fall through to the other sources rather than
+    // reporting the alias itself as a version.
   }
   // .tool-versions (asdf) — a line like `nodejs 20.11.0`
   const toolVersions = probe.content('.tool-versions');

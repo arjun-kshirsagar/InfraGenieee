@@ -416,6 +416,47 @@ describe('recommendProviders — headline scenarios', () => {
     expect(fitFor(r, 'render').requiresConfig).toBe(false);
     expect(fitFor(r, 'render').reasons.join(' ')).toMatch(/already contains a render\.yaml/i);
   });
+
+  // MAJOR-3: when the blueprint we generate carries a placeholder build/start
+  // command (we couldn't detect one), the Render fit must WARN the user BEFORE
+  // the deploy button — a caveat renders above the button — so they don't
+  // commit-and-click an incomplete file that "succeeds" and serves nothing.
+  it('Render fit carries a placeholder-warning caveat when the build/start command is unknown (MAJOR-3)', () => {
+    const d = detection({
+      framework: 'express',
+      runtime: 'node',
+      appShape: 'fullstack',
+      needs: ['database'],
+      build: NO_BUILD, // no detectable build/start → blueprint has # TODO placeholders
+      signals: [strongSignal('dep:express')],
+    });
+    const r = recommendProviders(d, REF, {});
+    const render = fitFor(r, 'render');
+    expect(render.requiresConfig).toBe(true);
+    // The warning must reference the placeholder / TODO / fill-in-first idea.
+    expect(render.caveats.join(' ')).toMatch(/placeholder|# TODO|fill|empty site/i);
+  });
+
+  it('Render fit does NOT carry the placeholder caveat when build+start are fully known (MAJOR-3)', () => {
+    const d = detection({
+      framework: 'express',
+      runtime: 'node',
+      appShape: 'fullstack',
+      needs: ['database'],
+      build: {
+        installCommand: 'npm ci',
+        buildCommand: 'npm run build',
+        outputDir: null,
+        startCommand: 'npm start',
+        nodeVersion: '20',
+      },
+      signals: [strongSignal('dep:express')],
+    });
+    const r = recommendProviders(d, REF, {});
+    const render = fitFor(r, 'render');
+    expect(render.requiresConfig).toBe(true);
+    expect(render.caveats.join(' ')).not.toMatch(/placeholder|# TODO|empty site/i);
+  });
 });
 
 /* -------------------------------------------------------------------------- */
