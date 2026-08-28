@@ -75,10 +75,13 @@ const extractedCandidateSchema = z.object({
   dimensionId: z.string().min(1),
   unitPriceUsd: z.number(),
   /** Optional — omitted unless the page states a free allowance. */
-  includedQuantity: z.number().min(0).optional(),
+  // Models occasionally emit JSON null for an optional field. Treat null the
+  // same as omission; rejecting the whole page would turn otherwise valid,
+  // evidence-backed prices into fetch_failed gaps.
+  includedQuantity: z.number().min(0).nullish(),
   /** Verbatim excerpt proving the allowance number AND its unit. Required
    *  whenever includedQuantity is present so the allowance gate can prove it. */
-  includedQuantityEvidence: z.string().max(600).optional(),
+  includedQuantityEvidence: z.string().max(600).nullish(),
   evidence: z.string().min(1).max(600),
 });
 
@@ -115,7 +118,7 @@ const EXTRACTOR_JSON_SCHEMA: Record<string, unknown> = {
               'The numeric USD price for this dimension. It MUST appear literally inside `evidence`.',
           },
           includedQuantity: {
-            type: 'number',
+            type: ['number', 'null'],
             description:
               'ONLY if the page states a free allowance for this dimension, EXPRESSED IN THE ' +
               'SAME UNIT the dimension bills in (see the `unit` given for the target). ' +
@@ -125,7 +128,7 @@ const EXTRACTOR_JSON_SCHEMA: Record<string, unknown> = {
               'and do not guess. An assumed or mis-united free tier is a fabricated discount.',
           },
           includedQuantityEvidence: {
-            type: 'string',
+            type: ['string', 'null'],
             description:
               'REQUIRED whenever you report includedQuantity: a VERBATIM substring of the page ' +
               'that contains BOTH the allowance number AND its unit (e.g. "the first 1 gibibyte ' +

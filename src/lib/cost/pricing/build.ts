@@ -310,16 +310,12 @@ async function buildViaExtractor(
       candByKey.set(k, list);
     }
 
+    const unresolvedTargets: DimensionTarget[] = [];
     for (const t of urlTargets) {
       const k = `${t.skuId}|${t.dimensionId}`;
       const cands = candByKey.get(k) ?? [];
       if (cands.length === 0) {
-        gaps.push({
-          skuId: t.skuId,
-          dimensionId: t.dimensionId,
-          reason: 'not_found_on_page',
-          detail: 'extractor returned no candidate for this dimension',
-        });
+        unresolvedTargets.push(t);
         continue;
       }
       const resolved = resolveMany(
@@ -328,6 +324,57 @@ async function buildViaExtractor(
       );
       if (resolved.kind === 'record') records.push(resolved.record);
       else gaps.push(resolved.gap);
+    }
+
+    // A large vendor page can contain dozens of requested dimensions. Models
+    // sometimes under-answer that first broad extraction even when the exact
+    // row is present. Give only the omitted targets one bounded, targeted
+    // second pass. The evidence gate below remains authoritative, so this can
+    // recover real rows but can never turn a guess into a price.
+    if (unresolvedTargets.length > 0) {
+      const retryTargets: ExtractionTarget[] = unresolvedTargets.map((t) => ({
+        skuId: t.skuId,
+        dimensionId: t.dimensionId,
+        extractionHint: t.extractionHint,
+        unit: t.unit,
+      }));
+      let retryCandidates: Awaited<ReturnType<typeof extractPrices>> = [];
+      try {
+        retryCandidates = await deps.extract(page, retryTargets, {
+          model,
+          signal: options.signal,
+        });
+      } catch {
+        // The broad pass already succeeded. A failed recovery pass simply
+        // leaves honest gaps; it must not discard the prices we already have.
+      }
+
+      const retryByKey = new Map<string, typeof retryCandidates>();
+      for (const c of retryCandidates) {
+        const k = `${c.skuId}|${c.dimensionId}`;
+        const list = retryByKey.get(k) ?? [];
+        list.push(c);
+        retryByKey.set(k, list);
+      }
+
+      for (const t of unresolvedTargets) {
+        const cands = retryByKey.get(`${t.skuId}|${t.dimensionId}`) ?? [];
+        if (cands.length === 0) {
+          gaps.push({
+            skuId: t.skuId,
+            dimensionId: t.dimensionId,
+            reason: 'not_found_on_page',
+            detail: 'extractor returned no candidate after a targeted retry',
+          });
+          continue;
+        }
+        const resolved = resolveMany(
+          t,
+          cands.map((c) => resolveExtracted(t, page, c, usedModel)),
+        );
+        if (resolved.kind === 'record') records.push(resolved.record);
+        else gaps.push(resolved.gap);
+      }
     }
   }
 
@@ -607,9 +654,38 @@ export function makeBuildPriceBook(deps: BuildDeps = defaultDeps): BuildPriceBoo
       });
     }
 
-    const { records, gaps } = FEED_PROVIDERS.has(provider)
-      ? await buildViaFeeds(provider, targets, deps, options)
-      : await buildViaExtractor(provider, targets, deps, options);
+    let records: PriceRecord[];
+    let gaps: PriceGap[];
+    if (provider === 'azure') {
+      // Prefer Azure's structured Retail Prices API. For dimensions without a
+      // verified descriptor—or a descriptor that no longer matches after a
+      // vendor taxonomy change—fall back to the public pricing page + evidence
+      // gated extractor instead of declaring them permanently unpriceable.
+      const described = targets.filter((t) => feedDescriptorFor(t.skuId, t.dimensionId));
+      const feed = await buildViaFeeds(provider, described, deps, options);
+      const feedGapKeys = new Set(feed.gaps.map((g) => `${g.skuId}|${g.dimensionId}`));
+      const fallbackTargets = targets.filter(
+        (t) =>
+          !feedDescriptorFor(t.skuId, t.dimensionId) ||
+          feedGapKeys.has(`${t.skuId}|${t.dimensionId}`),
+      );
+      const fallback =
+        fallbackTargets.length > 0
+          ? await buildViaExtractor(provider, fallbackTargets, deps, options)
+          : { records: [], gaps: [] };
+      const recoveredKeys = new Set(
+        fallback.records.map((r) => `${r.skuId}|${r.dimensionId}`),
+      );
+      records = [...feed.records, ...fallback.records];
+      gaps = [
+        ...feed.gaps.filter((g) => !recoveredKeys.has(`${g.skuId}|${g.dimensionId}`)),
+        ...fallback.gaps,
+      ];
+    } else if (FEED_PROVIDERS.has(provider)) {
+      ({ records, gaps } = await buildViaFeeds(provider, targets, deps, options));
+    } else {
+      ({ records, gaps } = await buildViaExtractor(provider, targets, deps, options));
+    }
 
     // RC2: validate every record against `priceRecordSchema` FIRST. A single
     // malformed record (e.g. an over-long evidence blob) becomes an

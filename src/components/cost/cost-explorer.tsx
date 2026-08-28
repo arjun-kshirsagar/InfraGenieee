@@ -26,8 +26,6 @@ import { INFRA_ROLE_LABEL } from '@/types/cost';
 import { buttonVariants } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
-import { CostRecommendationSummary } from './cost-recommendation-summary';
-import { CostCaveats } from './cost-caveats';
 import { CostSelectors } from './cost-selectors';
 
 export interface CostExplorerProps {
@@ -37,7 +35,7 @@ export interface CostExplorerProps {
 }
 
 export function CostExplorer({ data, onChangePrd, onRetryRecommendation }: CostExplorerProps) {
-  const { doc, books, requiredRoles, recommendation } = data;
+  const { doc, requiredRoles } = data;
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
@@ -77,17 +75,8 @@ export function CostExplorer({ data, onChangePrd, onRetryRecommendation }: CostE
         </div>
       </header>
 
-      {/* AI recommendation summary (or honest catalog-default fallback) */}
-      <CostRecommendationSummary
-        recommendation={recommendation}
-        onRetry={onRetryRecommendation}
-      />
-
       {/* F2 — the interactive selectors + live per-provider totals. */}
-      <CostSelectors data={data} />
-
-      {/* Honest caveats — non-negotiable (docs §5). */}
-      <CostCaveats books={books} />
+      <CostSelectors data={data} onRetryRecommendation={onRetryRecommendation} />
     </div>
   );
 }

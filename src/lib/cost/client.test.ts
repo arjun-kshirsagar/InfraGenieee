@@ -37,6 +37,7 @@ import {
   oldestPriceAt,
   isBookStale,
   totalGapCount,
+  booksWithRelevantGaps,
   PRICE_MAX_AGE_MS,
   type CostErrorCode,
 } from './client';
@@ -387,5 +388,53 @@ describe('oldestPriceAt / isBookStale / totalGapCount', () => {
   it('sums gaps across books', () => {
     const books = [bookFor('aws', '2026-07-26T00:00:00.000Z'), bookFor('gcp', '2026-07-26T00:00:00.000Z')];
     expect(totalGapCount(books)).toBe(2);
+  });
+
+  it('reports only gaps for SKUs used by the current estimates', () => {
+    const book = bookFor('aws', '2026-07-26T00:00:00.000Z');
+    book.gaps = [
+      { skuId: 'aws:selected', dimensionId: 'hours', reason: 'not_found_on_page' },
+      { skuId: 'aws:unrelated', dimensionId: 'requests', reason: 'not_found_on_page' },
+    ];
+    const estimates = [
+      {
+        provider: 'aws' as const,
+        region: 'us-east-1',
+        monthlyUsd: 0,
+        unsupportedRoles: [],
+        incomplete: true,
+        oldestPriceAt: null,
+        warnings: [],
+        items: [
+          {
+            role: 'compute-web' as const,
+            serviceId: 'aws:service',
+            serviceName: 'Service',
+            skuId: 'aws:selected',
+            skuName: 'Selected',
+            units: 1,
+            monthlyUsd: 0,
+            incomplete: true,
+            dimensions: [
+              {
+                dimensionId: 'hours',
+                label: 'Hours',
+                unit: 'USD / hour',
+                quantityKey: 'instanceHours' as const,
+                quantity: 1,
+                includedQuantity: 0,
+                billableQuantity: 1,
+                unitPriceUsd: 0,
+                monthlyUsd: 0,
+                source: null,
+                unpriced: true,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const [filtered] = booksWithRelevantGaps([book], estimates);
+    expect(filtered.gaps).toEqual([book.gaps[0]]);
   });
 });

@@ -934,4 +934,4 @@ export const CATALOG_VERSION = '1.0.0';
 
 /** Bumped when the fetch/extract/validate pipeline changes. A price book whose
  *  `pipelineVersion` is older than this is refetched rather than trusted. */
-export const PRICING_PIPELINE_VERSION = '1.0.0';
+export const PRICING_PIPELINE_VERSION = '1.1.0';

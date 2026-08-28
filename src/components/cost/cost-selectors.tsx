@@ -47,6 +47,7 @@ import {
 import { clampUsageValue, type UsageKey } from '@/lib/cost/f2/usage';
 import { formatUsd } from '@/lib/cost/f2/format';
 import { loadCostState, saveCostState } from '@/lib/cost/f2/store';
+import { booksWithRelevantGaps } from '@/lib/cost/client';
 import {
   Card,
   CardContent,
@@ -65,12 +66,15 @@ import { ComparisonBadges } from './comparison-badges';
 import { ComparisonCharts } from './comparison-charts';
 import { ProviderComparison, NoWinnerNote } from './provider-comparison';
 import { CostExport } from './cost-export';
+import { CostRecommendationSummary } from './cost-recommendation-summary';
+import { CostCaveats } from './cost-caveats';
 
 export interface CostSelectorsProps {
   data: CostData;
+  onRetryRecommendation: () => void;
 }
 
-export function CostSelectors({ data }: CostSelectorsProps) {
+export function CostSelectors({ data, onRetryRecommendation }: CostSelectorsProps) {
   const { doc, catalog, books, requiredRoles, recommendation } = data;
   const rec = recommendation.recommendation;
 
@@ -160,6 +164,10 @@ export function CostSelectors({ data }: CostSelectorsProps) {
       }),
     [orderedEstimates, catalog.services, now],
   );
+  const relevantBooks = React.useMemo(
+    () => booksWithRelevantGaps(books, orderedEstimates),
+    [books, orderedEstimates],
+  );
 
   const activeSelection = selections[active];
   const activeEstimate = estimates[active];
@@ -194,6 +202,12 @@ export function CostSelectors({ data }: CostSelectorsProps) {
 
   return (
     <div className="flex flex-col gap-6">
+      <CostRecommendationSummary
+        recommendation={recommendation}
+        onRetry={onRetryRecommendation}
+        budgetBand={doc.brief.context.budgetBand}
+        recommendedEstimate={estimates[rec.recommendedProvider]}
+      />
       {/* Provider tabs with live mini-totals */}
       <ProviderTabs
         providers={[...CLOUD_PROVIDERS]}
@@ -348,6 +362,9 @@ export function CostSelectors({ data }: CostSelectorsProps) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Only gaps for currently selected SKUs are relevant to this estimate. */}
+      <CostCaveats books={relevantBooks} />
     </div>
   );
 }

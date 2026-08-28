@@ -43,6 +43,7 @@ import {
   loadLastAnalyzed,
   loadDeployState,
 } from '@/lib/deploy/store';
+import { shouldRestoreLastAnalysis } from '@/lib/deploy/bootstrap';
 
 import { DeployEmptyState } from '@/components/deploy/deploy-empty-state';
 import { DeployLoadingView } from '@/components/deploy/deploy-loading-view';
@@ -166,7 +167,10 @@ export function DeployClient() {
     // Read everything synchronously, then apply state in a microtask so we never
     // call setState synchronously in the effect body (avoids cascading renders).
     const wantAttach = deepLinkId && docs.some((d) => d.id === deepLinkId) ? deepLinkId : null;
-    const lastUrl = loadLastAnalyzed();
+    // An explicit PRD deep-link means "start a new analysis with this context".
+    // Restoring an unrelated previous result hides the input and makes the user
+    // click through stale state before they can use the requested PRD.
+    const lastUrl = shouldRestoreLastAnalysis(wantAttach) ? loadLastAnalyzed() : null;
     const restored = lastUrl ? loadDeployState(lastUrl) : null;
 
     queueMicrotask(() => {

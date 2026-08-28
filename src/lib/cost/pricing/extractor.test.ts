@@ -103,6 +103,24 @@ describe('extractPrices — one call per page, faithful passthrough', () => {
     const [c] = await extractPrices(page, targets);
     expect(c.includedQuantity).toBe(100);
   });
+
+  it('treats null optional allowance fields as omitted instead of failing the page', async () => {
+    mockCall.mockResolvedValue({
+      prices: [
+        {
+          skuId: 'digitalocean:droplet:basic-1gb',
+          dimensionId: 'droplet-hour',
+          unitPriceUsd: 0.00893,
+          includedQuantity: null,
+          includedQuantityEvidence: null,
+          evidence: '$0.00893',
+        },
+      ],
+    });
+    const [candidate] = await extractPrices(page, targets);
+    expect(candidate.includedQuantity).toBe(0);
+    expect(candidate.includedQuantityEvidence).toBe('');
+  });
 });
 
 describe('extractPrices — defensive filtering', () => {

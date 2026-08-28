@@ -48,6 +48,7 @@ import {
   type CostSelection,
   type InfraRole,
   type PriceBook,
+  type ProviderEstimate,
   type RoleChoice,
   type ServiceCatalog,
   type CatalogService,
@@ -604,6 +605,31 @@ export function isBookStale(book: PriceBook, now: number): boolean {
  *  things" figure the UI surfaces so unpriced is never mistaken for free. */
 export function totalGapCount(books: readonly PriceBook[]): number {
   return books.reduce((sum, b) => sum + b.gaps.length, 0);
+}
+
+/**
+ * Keep only gaps that affect the services currently selected in the live
+ * estimates. Price books cover the whole catalog, but telling a user their
+ * simple web app has 44 gaps because unrelated Kafka/search SKUs were not
+ * priced is misleading. This preserves every relevant gap and updates as the
+ * user changes a SKU.
+ */
+export function booksWithRelevantGaps(
+  books: readonly PriceBook[],
+  estimates: readonly ProviderEstimate[],
+): PriceBook[] {
+  const relevant = new Set<string>();
+  for (const estimate of estimates) {
+    for (const item of estimate.items) {
+      for (const dimension of item.dimensions) {
+        relevant.add(`${item.skuId}|${dimension.dimensionId}`);
+      }
+    }
+  }
+  return books.map((book) => ({
+    ...book,
+    gaps: book.gaps.filter((gap) => relevant.has(`${gap.skuId}|${gap.dimensionId}`)),
+  }));
 }
 
 /** Human label for the single region we price per provider (§region caveat). */

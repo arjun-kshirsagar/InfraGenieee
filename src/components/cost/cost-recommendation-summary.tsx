@@ -10,10 +10,14 @@
  */
 
 import * as React from 'react';
-import { Sparkles, Info, RefreshCw, Lightbulb } from 'lucide-react';
+import { Sparkles, Info, RefreshCw, Lightbulb, TriangleAlert } from 'lucide-react';
 
 import type { RecommendOutcome } from '@/lib/cost/client';
+import type { ProviderEstimate } from '@/types/cost';
+import type { BudgetBand } from '@/types/prd';
 import { PROVIDER_LABEL } from '@/types/cost';
+import { assessBudget } from '@/lib/cost/budget';
+import { formatUsd } from '@/lib/cost/f2/format';
 import {
   Card,
   CardContent,
@@ -27,14 +31,19 @@ import { Button } from '@/components/ui/button';
 export interface CostRecommendationSummaryProps {
   recommendation: RecommendOutcome;
   onRetry?: () => void;
+  budgetBand: BudgetBand;
+  recommendedEstimate?: ProviderEstimate;
 }
 
 export function CostRecommendationSummary({
   recommendation,
   onRetry,
+  budgetBand,
+  recommendedEstimate,
 }: CostRecommendationSummaryProps) {
   const isFallback = recommendation.kind === 'fallback';
   const rec = recommendation.recommendation;
+  const budget = recommendedEstimate ? assessBudget(budgetBand, recommendedEstimate) : null;
 
   return (
     <Card>
@@ -54,6 +63,28 @@ export function CostRecommendationSummary({
       </CardHeader>
 
       <CardContent className="flex flex-col gap-4">
+        {budget?.kind === 'over' ? (
+          <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
+            <span className="text-balance">
+              Budget violation: the recommended configuration is{' '}
+              <strong>
+                {recommendedEstimate?.incomplete ? 'at least ' : ''}
+                {formatUsd(recommendedEstimate?.monthlyUsd ?? 0)}/month
+              </strong>
+              , above this PRD&rsquo;s under-{formatUsd(budget.maxUsd)}/month limit. Treat the
+              recommendation as an editable starting point, not a budget-compliant choice.
+            </span>
+          </div>
+        ) : budget?.kind === 'unknown' ? (
+          <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+            <Info className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden />
+            <span className="text-balance">
+              Budget compliance is not yet verifiable: this recommendation contains an unpriced
+              required line, so its real total may exceed {formatUsd(budget.maxUsd)}/month.
+            </span>
+          </div>
+        ) : null}
         {isFallback ? (
           <div className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-2">
