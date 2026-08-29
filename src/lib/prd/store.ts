@@ -44,6 +44,8 @@ export interface PrdDocumentSummary {
   createdAt: string;
 }
 
+const ACCOUNT_DOCUMENTS_ENDPOINT = '/api/prd/documents';
+
 const docKey = (id: string): string => `${DOC_KEY_PREFIX}${id}`;
 
 /**
@@ -195,5 +197,106 @@ export function clearDraft(): void {
     storage.removeItem(DRAFT_KEY);
   } catch {
     // ignore
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Account-backed documents                                                   */
+/* -------------------------------------------------------------------------- */
+
+async function readJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return undefined;
+  }
+}
+
+export async function saveAccountDocument(doc: PrdDocument): Promise<boolean> {
+  try {
+    const response = await fetch(ACCOUNT_DOCUMENTS_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ document: doc }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function listAccountDocuments(): Promise<PrdDocumentSummary[] | null> {
+  try {
+    const response = await fetch(ACCOUNT_DOCUMENTS_ENDPOINT, { method: 'GET' });
+    if (!response.ok) return null;
+    const body = await readJson(response);
+    if (
+      typeof body !== 'object' ||
+      body === null ||
+      !Array.isArray((body as { documents?: unknown }).documents)
+    ) {
+      return null;
+    }
+    const summaries: PrdDocumentSummary[] = [];
+    for (const item of (body as { documents: unknown[] }).documents) {
+      if (
+        typeof item === 'object' &&
+        item !== null &&
+        typeof (item as PrdDocumentSummary).id === 'string' &&
+        typeof (item as PrdDocumentSummary).title === 'string' &&
+        typeof (item as PrdDocumentSummary).createdAt === 'string'
+      ) {
+        summaries.push(item as PrdDocumentSummary);
+      }
+    }
+    return summaries;
+  } catch {
+    return null;
+  }
+}
+
+export async function loadAccountDocument(id: string): Promise<PrdDocument | null> {
+  try {
+    const response = await fetch(`${ACCOUNT_DOCUMENTS_ENDPOINT}/${encodeURIComponent(id)}`, {
+      method: 'GET',
+    });
+    if (!response.ok) return null;
+    const body = await readJson(response);
+    if (typeof body !== 'object' || body === null) return null;
+    const parsed = prdDocumentSchema.safeParse((body as { document?: unknown }).document);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function listDocumentsForCurrentUser(): Promise<PrdDocumentSummary[]> {
+  return (await listAccountDocuments()) ?? listDocuments();
+}
+
+export async function loadDocumentForCurrentUser(id: string): Promise<PrdDocument | null> {
+  return (await loadAccountDocument(id)) ?? loadDocument(id);
+}
+
+export async function seedAccountDocuments(): Promise<PrdDocumentSummary[] | null> {
+  try {
+    const response = await fetch('/api/prd/seed', { method: 'POST' });
+    if (!response.ok) return null;
+    const body = await readJson(response);
+    if (
+      typeof body !== 'object' ||
+      body === null ||
+      !Array.isArray((body as { documents?: unknown }).documents)
+    ) {
+      return null;
+    }
+    return (body as { documents: PrdDocumentSummary[] }).documents.filter(
+      (doc) =>
+        typeof doc?.id === 'string' &&
+        typeof doc?.title === 'string' &&
+        typeof doc?.createdAt === 'string',
+    );
+  } catch {
+    return null;
   }
 }

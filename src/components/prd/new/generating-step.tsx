@@ -60,7 +60,7 @@ import {
   progressFractionAt,
   type GenerateErrorPresentation,
 } from '@/lib/prd/generate-flow';
-import { saveDocument, clearDraft } from '@/lib/prd/store';
+import { saveAccountDocument, saveDocument, clearDraft } from '@/lib/prd/store';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -156,6 +156,7 @@ export function GeneratingStep({ brief, onEditBrief, onValidationError }: Genera
         // UI shows a settled state during the (near-instant) route transition,
         // and so the beforeunload handler is torn down before we navigate.
         setPhase({ name: 'done' });
+        await saveAccountDocument(outcome.document);
         saveAndRoute(outcome.document, {
           save: saveDocument,
           clearDraft,

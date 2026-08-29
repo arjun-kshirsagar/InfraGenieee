@@ -13,8 +13,8 @@
  *     └─(?prd=<id> attaches PRD context, stays on input)
  *
  * Design decisions, mirroring `/cost` (`cost-client.tsx`):
- *  - The optional PRD context lives in `localStorage`, so the picker reads
- *    `listDocuments()` / `loadDocument()` after mount — never on the server.
+ *  - The optional PRD context loads from account storage when signed in, then
+ *    falls back to localStorage for guest/demo documents.
  *  - A `?prd=<id>` deep-link attaches that PRD's context and STAYS on input
  *    (unlike `/cost`, the URL — not the PRD — is what kicks off analysis).
  *  - The analysis is a few seconds (no LLM), but we still impose NO client
@@ -31,7 +31,11 @@ import { useRouter, useSearchParams } from 'next/navigation';
 
 import type { PrdDocument } from '@/types/prd';
 import type { DeployPlan, DeployPrdContext } from '@/types/deploy';
-import { listDocuments, loadDocument, type PrdDocumentSummary } from '@/lib/prd/store';
+import {
+  listDocumentsForCurrentUser,
+  loadDocumentForCurrentUser,
+  type PrdDocumentSummary,
+} from '@/lib/prd/store';
 import {
   analyzeRepo,
   buildDeployPrdContext,
@@ -132,13 +136,13 @@ export function DeployClient() {
   );
 
   // ---- attach / detach a PRD as context ------------------------------------
-  const attachPrd = React.useCallback((id: string | null) => {
+  const attachPrd = React.useCallback(async (id: string | null) => {
     if (id === null) {
       setAttachedPrdId(null);
       setPrdContext(undefined);
       return;
     }
-    const doc: PrdDocument | null = loadDocument(id);
+    const doc: PrdDocument | null = await loadDocumentForCurrentUser(id);
     if (!doc) {
       // Stale/missing document — treat as a clean detach rather than crashing.
       setAttachedPrdId(null);
@@ -162,27 +166,28 @@ export function DeployClient() {
     if (bootstrappedRef.current) return;
     bootstrappedRef.current = true;
 
-    const docs = listDocuments();
+    let cancelled = false;
+    void listDocumentsForCurrentUser().then((docs) => {
+      if (cancelled) return;
+      const wantAttach = deepLinkId && docs.some((d) => d.id === deepLinkId) ? deepLinkId : null;
+      // An explicit PRD deep-link means "start a new analysis with this context".
+      // Restoring an unrelated previous result hides the input and makes the user
+      // click through stale state before they can use the requested PRD.
+      const lastUrl = shouldRestoreLastAnalysis(wantAttach) ? loadLastAnalyzed() : null;
+      const restored = lastUrl ? loadDeployState(lastUrl) : null;
 
-    // Read everything synchronously, then apply state in a microtask so we never
-    // call setState synchronously in the effect body (avoids cascading renders).
-    const wantAttach = deepLinkId && docs.some((d) => d.id === deepLinkId) ? deepLinkId : null;
-    // An explicit PRD deep-link means "start a new analysis with this context".
-    // Restoring an unrelated previous result hides the input and makes the user
-    // click through stale state before they can use the requested PRD.
-    const lastUrl = shouldRestoreLastAnalysis(wantAttach) ? loadLastAnalyzed() : null;
-    const restored = lastUrl ? loadDeployState(lastUrl) : null;
-
-    queueMicrotask(() => {
       setSummaries(docs);
       // A `?prd=<id>` deep-link attaches that PRD's context and STAYS on input.
-      if (wantAttach) attachPrd(wantAttach);
+      if (wantAttach) void attachPrd(wantAttach);
       // Restore the last successful analysis on a plain reload (no deep-link).
       if (restored) {
         setUrl(restored.repo.canonicalUrl);
         setStage({ name: 'result', plan: restored });
       }
     });
+    return () => {
+      cancelled = true;
+    };
     // Run once on mount; deepLinkId, attachPrd captured then.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -247,7 +252,7 @@ export function DeployClient() {
       summaries={summaries}
       attachedPrdId={attachedPrdId}
       onAttachPrd={(id) => {
-        attachPrd(id);
+        void attachPrd(id);
         // Keep the URL shareable/deep-linkable with the attached PRD.
         if (id) {
           router.replace(`/deploy?prd=${encodeURIComponent(id)}`);

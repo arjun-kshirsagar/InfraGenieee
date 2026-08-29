@@ -15,8 +15,8 @@
  *     └─(no PRDs)─▶ empty state → /prd/new
  *
  * Design decisions, mirroring Feature 1:
- *  - PRDs live in `localStorage` (no server persistence), so the picker reads
- *    `listDocuments()` / `loadDocument()` after mount — never on the server.
+ *  - PRDs load from account storage when signed in, then fall back to
+ *    localStorage for guest/demo documents.
  *  - The slow call is `GET /api/cost/prices` (a cold cache does real vendor
  *    fetches). We drive a staged-progress heuristic like `generating-step`,
  *    and impose NO client timeout — an `AbortController` cancels only on unmount.
@@ -31,7 +31,11 @@ import * as React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import type { PrdDocument } from '@/types/prd';
-import { listDocuments, loadDocument, type PrdDocumentSummary } from '@/lib/prd/store';
+import {
+  listDocumentsForCurrentUser,
+  loadDocumentForCurrentUser,
+  type PrdDocumentSummary,
+} from '@/lib/prd/store';
 import type {
   CostErrorPresentation,
   RecommendOutcome,
@@ -151,10 +155,14 @@ export function CostClient() {
   React.useEffect(() => {
     if (bootstrappedRef.current) return;
     bootstrappedRef.current = true;
-    const docs = listDocuments();
-    setSummaries(docs);
-    if (deepLinkId) {
-      const doc = loadDocument(deepLinkId);
+
+    let cancelled = false;
+    void listDocumentsForCurrentUser().then(async (docs) => {
+      if (cancelled) return;
+      setSummaries(docs);
+      if (!deepLinkId) return;
+      const doc = await loadDocumentForCurrentUser(deepLinkId);
+      if (cancelled) return;
       if (doc) {
         // Kick the load off the synchronous effect body (it calls setStage as
         // its first step) so we never set state synchronously inside the effect.
@@ -162,7 +170,10 @@ export function CostClient() {
       }
       // An unknown deep-link id falls through to the picker, which shows a
       // "we couldn't find that PRD" note alongside the list.
-    }
+    });
+    return () => {
+      cancelled = true;
+    };
     // Run once on mount; deepLinkId + load are captured then.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -199,12 +210,12 @@ export function CostClient() {
       summaries={summaries}
       unknownDeepLinkId={deepLinkId && summaries && !summaries.some((s) => s.id === deepLinkId) ? deepLinkId : null}
       onSelect={(id) => {
-        const doc = loadDocument(id);
-        if (doc) {
+        void loadDocumentForCurrentUser(id).then((doc) => {
+          if (!doc) return;
           // Keep the URL shareable/deep-linkable.
           router.replace(`/cost?prd=${encodeURIComponent(id)}`);
           void load(doc);
-        }
+        });
       }}
     />
   );

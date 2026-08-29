@@ -3,18 +3,15 @@
 /**
  * InfraGenie — client-rendered PRD document view.
  *
- * Documents live in localStorage (there is no `GET /api/prd/:id` in v1), so
- * loading MUST happen on the client after mount. Until then we render a loading
- * state; if the id is unknown or the stored data fails validation we render a
- * clear empty state with a route back to the wizard — never a blank screen or a
- * crash.
+ * Documents are loaded from account storage when the user is signed in, then
+ * fall back to localStorage for guest/demo documents.
  */
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, FileWarning, Wallet } from 'lucide-react';
 import type { PrdDocument } from '@/types/prd';
-import { loadDocument } from '@/lib/prd/store';
+import { loadDocumentForCurrentUser } from '@/lib/prd/store';
 import { buttonVariants } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -44,9 +41,13 @@ export function DocumentView({ id }: { id: string }) {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
 
   useEffect(() => {
-    const doc = loadDocument(id);
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setState(doc ? { status: 'ready', doc } : { status: 'not-found' });
+    let cancelled = false;
+    void loadDocumentForCurrentUser(id).then((doc) => {
+      if (!cancelled) setState(doc ? { status: 'ready', doc } : { status: 'not-found' });
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   if (state.status === 'loading') {
