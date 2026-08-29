@@ -24,6 +24,7 @@ import { NextResponse } from 'next/server';
 
 import { analyzeRequestSchema, analyzeResponseSchema } from '@/types/deploy';
 import { apiError, ERROR_STATUS, zodIssues } from '@/lib/prd/api';
+import { requireAllowedUser } from '@/lib/auth/guard';
 import type { ApiError } from '@/types/prd';
 import { buildDeployPlan } from '@/lib/deploy/plan';
 import { RepoError, type RepoErrorCode } from '@/lib/deploy/repo-seam';
@@ -75,6 +76,9 @@ function messageFor(code: ApiError['error']['code'], repoErrorCode: RepoErrorCod
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
+  const denied = await requireAllowedUser();
+  if (denied) return denied;
+
   // 1. Body must be valid JSON.
   let body: unknown;
   try {

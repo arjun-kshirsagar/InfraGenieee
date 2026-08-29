@@ -18,6 +18,7 @@ import {
   zodIssues,
 } from '@/lib/prd/api';
 import { generatePrdDocument, GenerationError } from '@/lib/prd/generation';
+import { requireAllowedUser } from '@/lib/auth/guard';
 
 // Generation calls an external model and must never be statically cached.
 export const runtime = 'nodejs';
@@ -26,6 +27,10 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 export async function POST(request: Request): Promise<NextResponse> {
+  // 0. Gate: only signed-in, allowlisted users may spend paid LLM calls.
+  const denied = await requireAllowedUser();
+  if (denied) return denied;
+
   // 1. Body must be valid JSON.
   let body: unknown;
   try {

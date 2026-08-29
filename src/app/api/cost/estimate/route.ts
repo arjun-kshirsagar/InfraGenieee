@@ -35,6 +35,7 @@ import {
 } from '@/types/cost';
 import type { ApiError } from '@/types/prd';
 import { apiError, ERROR_STATUS, zodIssues } from '@/lib/prd/api';
+import { requireAllowedUser } from '@/lib/auth/guard';
 import { catalogServices } from '@/lib/cost/catalog';
 import { buildPriceBook } from '@/lib/cost/pricing/build';
 import { estimateProvider, compare } from '@/lib/cost/estimate';
@@ -91,6 +92,9 @@ function validateSelections(request: EstimateRequest): Issues {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
+  const denied = await requireAllowedUser();
+  if (denied) return denied;
+
   // 1. Body must be valid JSON.
   let body: unknown;
   try {

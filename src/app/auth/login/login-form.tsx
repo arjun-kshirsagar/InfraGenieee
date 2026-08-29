@@ -19,6 +19,7 @@ type State =
 export function LoginForm() {
   const searchParams = useSearchParams();
   const next = searchParams.get('next') ?? '/prd';
+  const gateError = searchParams.get('error');
   const [state, setState] = React.useState<State>({ status: 'idle' });
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -53,6 +54,12 @@ export function LoginForm() {
         <CardDescription>Use a magic link to save PRDs to your account.</CardDescription>
       </CardHeader>
       <CardContent>
+        {gateError === 'not_allowed' ? (
+          <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            This account isn&apos;t authorized for InfraGenie yet. Sign in with an approved email,
+            or contact the owner to request access.
+          </div>
+        ) : null}
         {state.status === 'sent' ? (
           <div className="flex flex-col gap-2 text-sm">
             <p className="font-medium">Check your email</p>

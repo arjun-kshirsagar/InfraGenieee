@@ -20,12 +20,17 @@ import {
   zodIssues,
 } from '@/lib/prd/api';
 import { generateClarifyingQuestions, GenerationError } from '@/lib/prd/generation';
+import { requireAllowedUser } from '@/lib/auth/guard';
 
 // Hits an external model; never statically cache and never prerender.
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request): Promise<NextResponse> {
+  // 0. Gate: only signed-in, allowlisted users may spend paid LLM calls.
+  const denied = await requireAllowedUser();
+  if (denied) return denied;
+
   // 1. Body must be valid JSON.
   let body: unknown;
   try {

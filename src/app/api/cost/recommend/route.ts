@@ -17,6 +17,7 @@ import { NextResponse } from 'next/server';
 
 import { recommendRequestSchema, recommendResponseSchema } from '@/types/cost';
 import { apiError, ERROR_STATUS, zodIssues } from '@/lib/prd/api';
+import { requireAllowedUser } from '@/lib/auth/guard';
 import type { ApiError } from '@/types/prd';
 import { recommendDeployment } from '@/lib/cost/llm/recommend';
 import { PricingError, type PricingErrorCode } from '@/lib/cost/pricing-seam';
@@ -44,6 +45,9 @@ const PRICING_ERROR_CODE: Record<PricingErrorCode, ApiError['error']['code']> = 
 };
 
 export async function POST(request: Request): Promise<NextResponse> {
+  const denied = await requireAllowedUser();
+  if (denied) return denied;
+
   // 1. Body must be valid JSON.
   let body: unknown;
   try {
