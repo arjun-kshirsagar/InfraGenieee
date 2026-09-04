@@ -32,11 +32,39 @@ function authErrorMessage(error: { code?: string; message?: string }): string {
   }
 }
 
+function redirectErrorMessage(code: string | null): string | null {
+  switch (code) {
+    case 'otp_expired':
+      return 'That magic link has expired or was already used. Request a fresh link and open the newest email in this same browser.';
+    case 'access_denied':
+      return 'Supabase denied that sign-in link. Request a fresh link and try again.';
+    case 'flow_state_not_found':
+    case 'bad_code_verifier':
+      return 'This magic link was opened in a different browser or after the login session expired. Request a fresh link from this browser and open it here.';
+    case 'callback_missing_code':
+      return 'The sign-in callback did not include a login code. Request a fresh magic link and open the newest email.';
+    case 'callback_failed':
+      return 'The sign-in callback failed. Request a fresh magic link and try again.';
+    default:
+      return null;
+  }
+}
+
 export function LoginForm() {
   const searchParams = useSearchParams();
   const next = searchParams.get('next') ?? '/prd';
   const gateError = searchParams.get('error');
+  const [redirectError, setRedirectError] = React.useState<string | null>(
+    redirectErrorMessage(gateError),
+  );
   const [state, setState] = React.useState<State>({ status: 'idle' });
+
+  React.useEffect(() => {
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const message =
+      redirectErrorMessage(hash.get('error_code')) ?? redirectErrorMessage(hash.get('error'));
+    if (message) queueMicrotask(() => setRedirectError(message));
+  }, []);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -70,6 +98,11 @@ export function LoginForm() {
         <CardDescription>Use a magic link to save PRDs to your account.</CardDescription>
       </CardHeader>
       <CardContent>
+        {redirectError ? (
+          <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            {redirectError}
+          </div>
+        ) : null}
         {gateError === 'not_allowed' ? (
           <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
             This account isn&apos;t authorized for InfraGenie yet. Sign in with an approved email,
