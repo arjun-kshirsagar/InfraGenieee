@@ -10,12 +10,13 @@
  * just redeploy to pick up the new env value.
  */
 
-const DEFAULT_ALLOWED = ['visheshpaliwal777@gmail.com',
+const DEFAULT_ALLOWED = [
+  'visheshpaliwal777@gmail.com',
   'arjunk.dev2025@gmail.com',
   'kshirsagararjun20@gmail.com',
   'Icpcani@gmail.com',
-  'vibhuttv@gmail.com'
-];
+  'vibhuttv@gmail.com',
+].map((email) => email.toLowerCase());
 
 export function allowedEmails(): string[] {
   const raw = process.env.ALLOWED_EMAILS;

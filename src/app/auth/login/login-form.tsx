@@ -16,6 +16,22 @@ type State =
   | { status: 'sent'; email: string }
   | { status: 'error'; message: string };
 
+function authErrorMessage(error: { code?: string; message?: string }): string {
+  switch (error.code) {
+    case 'over_email_send_rate_limit':
+      return 'Supabase has rate-limited magic-link emails for now. Wait a few minutes, then try again.';
+    case 'otp_disabled':
+      return 'Magic-link sign-in is disabled in Supabase. Enable Email OTP/Magic Link in Authentication settings.';
+    case 'validation_failed':
+    case 'email_address_invalid':
+      return 'Enter a valid email address without quotes, commas, or extra text.';
+    default:
+      return error.message
+        ? `Could not send the sign-in email: ${error.message}`
+        : 'Could not send the sign-in email. Try again.';
+  }
+}
+
 export function LoginForm() {
   const searchParams = useSearchParams();
   const next = searchParams.get('next') ?? '/prd';
@@ -40,7 +56,7 @@ export function LoginForm() {
     });
 
     if (error) {
-      setState({ status: 'error', message: 'Could not send the sign-in email. Try again.' });
+      setState({ status: 'error', message: authErrorMessage(error) });
       return;
     }
 
