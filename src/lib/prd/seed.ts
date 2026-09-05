@@ -154,7 +154,7 @@ function makeSeedDocument(config: SeedConfig): PrdDocument {
         { risk: 'Seed data pollutes production', impact: 'p2', mitigation: 'Make seeding an explicit signed-in request, not automatic startup behavior.' },
       ],
       openQuestions: ['Should production expose the seed action after private beta?'],
-      assumptions: ['Email magic links are acceptable for the first auth milestone.'],
+      assumptions: ['Email and password auth is acceptable for the first auth milestone.'],
     },
     architecture: {
       summary: 'Next.js API routes verify Supabase sessions and persist account-owned PRD documents to MongoDB.',

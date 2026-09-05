@@ -92,7 +92,7 @@ async function main() {
       'A B2B SaaS where verified restaurant owners self-serve manage their own ' +
         'menu listings and pricing; diners browse public menus and place pickup ' +
         'orders paid via Stripe. Owners see an analytics dashboard of orders. ' +
-        'No delivery in v1. Owners authenticate via email magic-link; diners ' +
+        'No delivery in v1. Owners authenticate with email and password; diners ' +
         'check out as guests.',
       {
         userScale: 'medium',
