@@ -4,7 +4,7 @@ import { createServerClient } from '@supabase/ssr';
 import { isAllowedEmail } from '@/lib/auth/allowlist';
 
 // Auth routes must stay reachable while signed out, or gating would loop.
-const PUBLIC_PATHS = ['/auth/login', '/auth/logout'];
+const PUBLIC_PATHS = ['/auth/login', '/auth/logout', '/auth/reset-password'];
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
@@ -42,7 +42,7 @@ export async function middleware(request: NextRequest) {
 
   const allowed = isAllowedEmail(user?.email);
 
-  // Public auth routes always pass so login/callback/logout can work.
+  // Public auth routes always pass so login/logout/reset can work.
   if (isPublicPath(pathname)) return response;
 
   if (!allowed) {
